@@ -1,7 +1,19 @@
 #pragma once
 
+#if defined(CPUEAXH_PLATFORM_KERNEL) || defined(_KERNEL_MODE) || defined(_NTDDK_) || defined(_WDM_INCLUDED_) || defined(_NTIFS_)
+#include <stddef.h>
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef short int16_t;
+typedef unsigned short uint16_t;
+typedef int int32_t;
+typedef unsigned int uint32_t;
+typedef __int64 int64_t;
+typedef unsigned __int64 uint64_t;
+#else
 #include <stdint.h>
 #include <stddef.h>
+#endif
 
 typedef int cpueaxh_err;
 typedef struct cpueaxh_engine cpueaxh_engine;

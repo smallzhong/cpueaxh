@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "cpueaxh", "cpueaxh\cpueaxh.
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "example", "example\example.vcxproj", "{A90FBDA8-52C3-4FD4-AF04-983C40C6762C}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "kexample", "kexample\kexample.vcxproj", "{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,6 +33,18 @@ Global
 		{A90FBDA8-52C3-4FD4-AF04-983C40C6762C}.Release|x64.Build.0 = Release|x64
 		{A90FBDA8-52C3-4FD4-AF04-983C40C6762C}.Release|x86.ActiveCfg = Release|Win32
 		{A90FBDA8-52C3-4FD4-AF04-983C40C6762C}.Release|x86.Build.0 = Release|Win32
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Debug|x64.ActiveCfg = Debug|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Debug|x64.Build.0 = Debug|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Debug|x64.Deploy.0 = Debug|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Debug|x86.ActiveCfg = Debug|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Debug|x86.Build.0 = Debug|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Debug|x86.Deploy.0 = Debug|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Release|x64.ActiveCfg = Release|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Release|x64.Build.0 = Release|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Release|x64.Deploy.0 = Release|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Release|x86.ActiveCfg = Release|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Release|x86.Build.0 = Release|x64
+		{22A4F131-AC2A-1258-CFDC-A6AAB86510EE}.Release|x86.Deploy.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

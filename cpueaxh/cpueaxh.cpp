@@ -3,6 +3,10 @@
 
 #define CPUEAXH_MAX_HOOKS 64
 
+#if defined(CPUEAXH_PLATFORM_KERNEL) || defined(_KERNEL_MODE) || defined(_NTDDK_) || defined(_WDM_INCLUDED_) || defined(_NTIFS_)
+extern "C" int _fltused = 0;
+#endif
+
 extern "C" cpueaxh_err cpueaxh_host_call_asm(cpueaxh_x86_context* context, cpueaxh_cb_host_bridge_t bridge, void* bridge_block);
 
 struct CPUEAXH_HOST_BRIDGE_BLOCK {
@@ -228,14 +232,14 @@ static cpueaxh_err cpueaxh_ensure_escape_capacity(cpueaxh_engine* engine, size_t
     }
 
     CPUEAXH_ESCAPE_ENTRY* new_entries = reinterpret_cast<CPUEAXH_ESCAPE_ENTRY*>(
-        CPUEAXH_REALLOC(engine->escapes, new_capacity * sizeof(CPUEAXH_ESCAPE_ENTRY)));
+        CPUEAXH_ALLOC_ZEROED(new_capacity * sizeof(CPUEAXH_ESCAPE_ENTRY)));
     if (!new_entries) {
         return CPUEAXH_ERR_NOMEM;
     }
 
-    if (new_capacity > engine->escape_capacity) {
-        const size_t old_capacity = engine->escape_capacity;
-        CPUEAXH_MEMSET(new_entries + old_capacity, 0, (new_capacity - old_capacity) * sizeof(CPUEAXH_ESCAPE_ENTRY));
+    if (engine->escapes && engine->escape_count != 0) {
+        CPUEAXH_MEMCPY(new_entries, engine->escapes, engine->escape_count * sizeof(CPUEAXH_ESCAPE_ENTRY));
+        CPUEAXH_FREE(engine->escapes);
     }
 
     engine->escapes = new_entries;

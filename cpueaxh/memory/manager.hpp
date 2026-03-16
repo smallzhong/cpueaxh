@@ -2,37 +2,10 @@
 
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-#include <string.h>
-#include <stdlib.h>
+#include "../cpueaxh_platform.hpp"
 
-#ifndef CPUEAXH_MEMSET
-#define CPUEAXH_MEMSET memset
-#endif
-
-#ifndef CPUEAXH_MEMCPY
-#define CPUEAXH_MEMCPY memcpy
-#endif
-
-#ifndef CPUEAXH_MEMMOVE
-#define CPUEAXH_MEMMOVE memmove
-#endif
-
-#ifndef CPUEAXH_ALLOC_ZEROED
-#define CPUEAXH_ALLOC_ZEROED(size) calloc(1, (size))
-#endif
-
-#ifndef CPUEAXH_REALLOC
-#define CPUEAXH_REALLOC(ptr, size) realloc((ptr), (size))
-#endif
-
-#ifndef CPUEAXH_FREE
-#define CPUEAXH_FREE(ptr) free((ptr))
-#endif
-
-#define PAGE_SIZE 0x1000ULL
-#define PAGE_MASK (~(PAGE_SIZE - 1))
+#define CPUEAXH_PAGE_SIZE 0x1000ULL
+#define CPUEAXH_PAGE_MASK (~(CPUEAXH_PAGE_SIZE - 1))
 #define MM_PAGE_CACHE_SIZE 256u
 
 #define MM_PROT_READ  0x1u
@@ -101,15 +74,15 @@ struct MM_ACCESS_INFO {
 };
 
 inline uint64_t align_up_page(uint64_t size) {
-    return (size + PAGE_SIZE - 1) & PAGE_MASK;
+    return (size + CPUEAXH_PAGE_SIZE - 1) & CPUEAXH_PAGE_MASK;
 }
 
 inline uint64_t align_down_page(uint64_t addr) {
-    return addr & PAGE_MASK;
+    return addr & CPUEAXH_PAGE_MASK;
 }
 
 inline bool mm_is_page_aligned(uint64_t value) {
-    return (value & (PAGE_SIZE - 1)) == 0;
+    return (value & (CPUEAXH_PAGE_SIZE - 1)) == 0;
 }
 
 inline bool mm_is_valid_perms(uint32_t perms) {
@@ -202,16 +175,14 @@ inline bool mm_reserve_region_capacity(MEMORY_MANAGER* mgr, size_t capacity) {
     }
 
     MEMORY_REGION* new_regions = reinterpret_cast<MEMORY_REGION*>(
-        CPUEAXH_REALLOC(mgr->regions, new_capacity * sizeof(MEMORY_REGION)));
+        CPUEAXH_ALLOC_ZEROED(new_capacity * sizeof(MEMORY_REGION)));
     if (!new_regions) {
         return false;
     }
 
-    if (new_capacity > mgr->region_capacity) {
-        CPUEAXH_MEMSET(
-            new_regions + mgr->region_capacity,
-            0,
-            (new_capacity - mgr->region_capacity) * sizeof(MEMORY_REGION));
+    if (mgr->regions && mgr->region_count != 0) {
+        CPUEAXH_MEMCPY(new_regions, mgr->regions, mgr->region_count * sizeof(MEMORY_REGION));
+        CPUEAXH_FREE(mgr->regions);
     }
 
     mgr->regions = new_regions;
@@ -244,16 +215,14 @@ inline bool mm_reserve_patch_capacity(MEMORY_MANAGER* mgr, size_t capacity) {
     }
 
     MM_PATCH_ENTRY* new_patches = reinterpret_cast<MM_PATCH_ENTRY*>(
-        CPUEAXH_REALLOC(mgr->patches, new_capacity * sizeof(MM_PATCH_ENTRY)));
+        CPUEAXH_ALLOC_ZEROED(new_capacity * sizeof(MM_PATCH_ENTRY)));
     if (!new_patches) {
         return false;
     }
 
-    if (new_capacity > mgr->patch_capacity) {
-        CPUEAXH_MEMSET(
-            new_patches + mgr->patch_capacity,
-            0,
-            (new_capacity - mgr->patch_capacity) * sizeof(MM_PATCH_ENTRY));
+    if (mgr->patches && mgr->patch_count != 0) {
+        CPUEAXH_MEMCPY(new_patches, mgr->patches, mgr->patch_count * sizeof(MM_PATCH_ENTRY));
+        CPUEAXH_FREE(mgr->patches);
     }
 
     mgr->patches = new_patches;

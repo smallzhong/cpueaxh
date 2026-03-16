@@ -16,6 +16,7 @@ The project is designed to provide:
 - an API style that is as close as practical to [Unicorn](https://github.com/unicorn-engine/unicorn).
 - both a [Unicorn](https://github.com/unicorn-engine/unicorn)-like self-managed memory mode **(guest mode)** and direct emulation in real memory space **(host mode)**.
 - host-mode memory patching, allowing the emulated CPU to observe bytes different from the underlying real memory.
+- a single core codebase that can be built for user mode or compiled directly into a kernel driver through a small platform abstraction layer, without maintaining two copies of the emulator core.
 - the library does not depend on exception handling for execution.
 
 ## Highlights
@@ -221,6 +222,8 @@ Major coverage includes:
   - instruction and instruction-family implementations
 - [example](example)
   - example program
+- [kexample](kexample)
+  - KMDF kernel usage sample that compiles the same `cpueaxh` core sources directly in kernel mode
 - [cpueaxh.sln](cpueaxh.sln)
   - Visual Studio solution
 
@@ -311,6 +314,8 @@ The example is located in [example/main.cpp](example/main.cpp) and includes:
 
 The example project currently has no external library dependency beyond the Windows / MSVC toolchain and uses MASM for the native escape bridge samples.
 
+The kernel sample is located in [kexample/main.cpp](kexample/main.cpp). It demonstrates guest-mode execution inside a KMDF non-PnP driver and builds the same core source files directly with the kernel toolchain so the emulator implementation remains shared between user mode and kernel mode.
+
 ## Build
 
 Recommended environment:
@@ -318,6 +323,7 @@ Recommended environment:
 - Visual Studio 2022
 - MSVC v143
 - x64
+- WDK / KMDF if you want to build [kexample](kexample)
 
 Open [cpueaxh.sln](cpueaxh.sln) and build the solution.
 

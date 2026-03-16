@@ -2,28 +2,7 @@
 
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-
-#ifndef CPUEAXH_MEMSET
-#include <string.h>
-#define CPUEAXH_MEMSET memset
-#endif
-
-#ifndef CPUEAXH_MEMCPY
-#include <string.h>
-#define CPUEAXH_MEMCPY memcpy
-#endif
-
-#ifndef CPUEAXH_ALLOC_ZEROED
-#include <stdlib.h>
-#define CPUEAXH_ALLOC_ZEROED(size) calloc(1, (size))
-#endif
-
-#ifndef CPUEAXH_FREE
-#include <stdlib.h>
-#define CPUEAXH_FREE(ptr) free((ptr))
-#endif
+#include "../cpueaxh_platform.hpp"
 
 struct MEMORY_MANAGER;
 struct CPU_CONTEXT;
@@ -63,7 +42,7 @@ inline void cpu_exception_reset(CPU_EXCEPTION_STATE* state) {
 }
 
 inline CPU_CONTEXT*& cpu_active_context_slot() {
-    static thread_local CPU_CONTEXT* current_ctx = nullptr;
+    CPUEAXH_ACTIVE_CONTEXT_STORAGE CPU_CONTEXT* current_ctx = nullptr;
     return current_ctx;
 }
 

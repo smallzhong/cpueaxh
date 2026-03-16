@@ -175,7 +175,7 @@ void idiv_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
     }
 
     uint64_t abs_remainder = 0;
-    uint64_t abs_quotient = _udiv128(abs_dividend_high, abs_dividend_low, abs_divisor, &abs_remainder);
+    uint64_t abs_quotient = cpueaxh_udiv128(abs_dividend_high, abs_dividend_low, abs_divisor, &abs_remainder);
     bool quotient_negative = dividend_negative ^ divisor_negative;
 
     if (idiv_quotient_overflows(abs_quotient, quotient_negative, 64)) {

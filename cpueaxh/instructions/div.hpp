@@ -124,7 +124,7 @@ void div_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64
     }
 
     uint64_t remainder = 0;
-    uint64_t quotient = _udiv128(dividend_high, dividend_low, divisor, &remainder);
+    uint64_t quotient = cpueaxh_udiv128(dividend_high, dividend_low, divisor, &remainder);
 
     set_reg64(ctx, REG_RAX, quotient);
     set_reg64(ctx, REG_RDX, remainder);
