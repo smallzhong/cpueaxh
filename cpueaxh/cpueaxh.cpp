@@ -521,6 +521,11 @@ static cpueaxh_err cpueaxh_reg_write_raw(CPU_CONTEXT* context, int regid, const 
     }
 }
 
+static bool cpueaxh_is_optional_escape_instruction(cpueaxh_escape_insn_id instruction_id) {
+    return instruction_id == CPUEAXH_ESCAPE_INSN_RDSSPD ||
+        instruction_id == CPUEAXH_ESCAPE_INSN_RDSSPQ;
+}
+
 static void cpueaxh_dispatch_code_hooks(cpueaxh_engine* engine, uint32_t type, uint64_t address) {
     for (int index = 0; index < CPUEAXH_MAX_HOOKS; index++) {
         CPUEAXH_HOOK_ENTRY* hook = &engine->hooks[index];
@@ -586,6 +591,10 @@ static bool cpueaxh_try_dispatch_escape(cpueaxh_engine* engine, uint64_t address
             *callback_error = CPUEAXH_ERR_OK;
         }
         return true;
+    }
+
+    if (cpueaxh_is_optional_escape_instruction(instruction_id)) {
+        return false;
     }
 
     cpu_raise_exception(&engine->context, CPU_EXCEPTION_UD, 0);
