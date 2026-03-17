@@ -88,10 +88,12 @@ The engine supports basic code hooks, Unicorn-like memory access hooks, and inst
 - `cpueaxh_hook_add_address()` for exact-address hooks
 - `CPUEAXH_HOOK_CODE_PRE` and `CPUEAXH_HOOK_CODE_POST`
 - `CPUEAXH_HOOK_MEM_READ`, `CPUEAXH_HOOK_MEM_WRITE`, and `CPUEAXH_HOOK_MEM_FETCH`
+- `CPUEAXH_HOOK_MEM_READ_UNMAPPED`, `CPUEAXH_HOOK_MEM_WRITE_UNMAPPED`, and `CPUEAXH_HOOK_MEM_FETCH_UNMAPPED`
+- `CPUEAXH_HOOK_MEM_READ_PROT`, `CPUEAXH_HOOK_MEM_WRITE_PROT`, and `CPUEAXH_HOOK_MEM_FETCH_PROT`
 - `cpueaxh_escape_add()` / `cpueaxh_escape_del()`
 - `cpueaxh_host_call()` for bridging an escape into native execution
 
-Memory-access hooks are range-filterable and can observe successful instruction fetches, memory reads, and memory writes during emulation together with address, access size, and value.
+Memory-access hooks are range-filterable and follow Unicorn-style split semantics. Successful accesses use `cpueaxh_cb_hookmem_t` and report instruction fetches, memory reads, and memory writes together with address, access size, and value. Invalid accesses use `cpueaxh_cb_hookmem_invalid_t`; the callback may fix the mapping/protection state and return nonzero to retry the access, or return `0` to let emulation fail with the corresponding memory error. For invalid reads and fetches the reported value is `0`, while invalid writes report the attempted write value.
 
 An escape is intended for handing selected instructions off from the emulator to a real host-side execution path.
 The escape callback receives the decoded instruction bytes together with a mutable `cpueaxh_x86_context`, and may either emulate the instruction manually in `C/C++` or transfer execution through `cpueaxh_host_call()`.
@@ -274,6 +276,7 @@ Major coverage includes:
 ### Hooking / escape
 - `cpueaxh_cb_hookcode_t`
 - `cpueaxh_cb_hookmem_t`
+- `cpueaxh_cb_hookmem_invalid_t`
 - `cpueaxh_hook_add()`
 - `cpueaxh_hook_add_address()`
 - `cpueaxh_hook_del()`
@@ -282,6 +285,12 @@ Major coverage includes:
 - `CPUEAXH_HOOK_MEM_READ`
 - `CPUEAXH_HOOK_MEM_WRITE`
 - `CPUEAXH_HOOK_MEM_FETCH`
+- `CPUEAXH_HOOK_MEM_READ_UNMAPPED`
+- `CPUEAXH_HOOK_MEM_WRITE_UNMAPPED`
+- `CPUEAXH_HOOK_MEM_FETCH_UNMAPPED`
+- `CPUEAXH_HOOK_MEM_READ_PROT`
+- `CPUEAXH_HOOK_MEM_WRITE_PROT`
+- `CPUEAXH_HOOK_MEM_FETCH_PROT`
 - `cpueaxh_escape_add()`
 - `cpueaxh_escape_del()`
 - `cpueaxh_host_call()`
@@ -329,6 +338,7 @@ The example is located in [example/main.cpp](example/main.cpp) and includes:
 - a guest post-hook demo that prints the post-instruction `RIP`
 - a guest exact-address hook demo
 - a guest memory-access hook demo for fetch/read/write events
+- a guest invalid-memory recovery demo for `READ_UNMAPPED` and `WRITE_PROT`
 - a host-mode `MessageBoxA` execution demo
 - a host-mode memory patch demo
 - default escape handlers covering `syscall`, `sysenter`, `int`, `int3`, `cpuid`, `xgetbv`, `rdtsc`, `rdtscp`, `rdrand`, `hlt`, `in`, and `out`

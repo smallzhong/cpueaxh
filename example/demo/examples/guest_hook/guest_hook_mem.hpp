@@ -3,6 +3,7 @@ constexpr uint64_t GUEST_MEM_HOOK_STACK_BASE = 0x210000;
 constexpr uint64_t GUEST_MEM_HOOK_STACK_SIZE = 0x1000;
 constexpr uint64_t GUEST_MEM_HOOK_DATA_BASE = 0x310000;
 constexpr uint64_t GUEST_MEM_HOOK_RESULT_ADDRESS = GUEST_MEM_HOOK_DATA_BASE + 8;
+constexpr uint64_t GUEST_MEM_HOOK_RECOVERED_VALUE = 0x0F1E2D3C4B5A6978ull;
 constexpr uint8_t GUEST_MEM_HOOK_CODE[] = {
     0x48, 0xBB, 0x00, 0x00, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x48, 0x8B, 0x03,
@@ -16,6 +17,12 @@ inline const char* guest_mem_hook_type_name(uint32_t type) {
     case CPUEAXH_HOOK_MEM_READ: return "mem-read";
     case CPUEAXH_HOOK_MEM_WRITE: return "mem-write";
     case CPUEAXH_HOOK_MEM_FETCH: return "mem-fetch";
+    case CPUEAXH_HOOK_MEM_READ_UNMAPPED: return "mem-read-unmapped";
+    case CPUEAXH_HOOK_MEM_WRITE_UNMAPPED: return "mem-write-unmapped";
+    case CPUEAXH_HOOK_MEM_FETCH_UNMAPPED: return "mem-fetch-unmapped";
+    case CPUEAXH_HOOK_MEM_READ_PROT: return "mem-read-prot";
+    case CPUEAXH_HOOK_MEM_WRITE_PROT: return "mem-write-prot";
+    case CPUEAXH_HOOK_MEM_FETCH_PROT: return "mem-fetch-prot";
     default: return "mem-unknown";
     }
 }
@@ -29,6 +36,36 @@ inline void guest_memory_access_hook(cpueaxh_engine* engine, uint32_t type, uint
         << " size=" << std::dec << size
         << " value=0x" << std::hex << std::setw((int)(size * 2)) << value
         << std::dec << std::endl;
+}
+
+inline int guest_invalid_memory_access_hook(cpueaxh_engine* engine, uint32_t type, uint64_t address, size_t size, uint64_t value, void* user_data) {
+    (void)user_data;
+
+    std::cout << guest_mem_hook_type_name(type)
+        << " @ 0x" << std::hex << std::setfill('0') << std::setw(16) << address
+        << " size=" << std::dec << size
+        << " value=0x" << std::hex << std::setw((int)(size * 2)) << value
+        << " -> recovering" << std::dec << std::endl;
+
+    if (type != CPUEAXH_HOOK_MEM_READ_UNMAPPED || address < GUEST_MEM_HOOK_DATA_BASE || address >= (GUEST_MEM_HOOK_DATA_BASE + 0x1000)) {
+        return 0;
+    }
+
+    cpueaxh_err err = cpueaxh_mem_map(engine, GUEST_MEM_HOOK_DATA_BASE, 0x1000, CPUEAXH_PROT_READ | CPUEAXH_PROT_WRITE);
+    if (err != CPUEAXH_ERR_OK) {
+        std::cerr << "cpueaxh_mem_map(recover) failed: " << cpueaxh_err_string(err)
+            << " (" << err << ")" << std::endl;
+        return 0;
+    }
+
+    err = cpueaxh_mem_write(engine, GUEST_MEM_HOOK_DATA_BASE, &GUEST_MEM_HOOK_RECOVERED_VALUE, sizeof(GUEST_MEM_HOOK_RECOVERED_VALUE));
+    if (err != CPUEAXH_ERR_OK) {
+        std::cerr << "cpueaxh_mem_write(recover) failed: " << cpueaxh_err_string(err)
+            << " (" << err << ")" << std::endl;
+        return 0;
+    }
+
+    return 1;
 }
 
 inline bool setup_guest_memory_hook_demo(cpueaxh_engine** out_engine) {
@@ -112,6 +149,7 @@ inline void run_guest_hook_mem_demo() {
     cpueaxh_hook fetch_hook = 0;
     cpueaxh_hook read_hook = 0;
     cpueaxh_hook write_hook = 0;
+    cpueaxh_hook read_unmapped_hook = 0;
 
     cpueaxh_err err = cpueaxh_hook_add(engine, &fetch_hook, CPUEAXH_HOOK_MEM_FETCH, (void*)guest_memory_access_hook, 0,
         GUEST_MEM_HOOK_CODE_BASE, GUEST_MEM_HOOK_CODE_BASE + sizeof(GUEST_MEM_HOOK_CODE) - 1);
@@ -123,12 +161,17 @@ inline void run_guest_hook_mem_demo() {
         err = cpueaxh_hook_add(engine, &write_hook, CPUEAXH_HOOK_MEM_WRITE, (void*)guest_memory_access_hook, 0,
             GUEST_MEM_HOOK_DATA_BASE, GUEST_MEM_HOOK_DATA_BASE + 0xFFF);
     }
+    if (err == CPUEAXH_ERR_OK) {
+        err = cpueaxh_hook_add(engine, &read_unmapped_hook, CPUEAXH_HOOK_MEM_READ_UNMAPPED, (void*)guest_invalid_memory_access_hook, 0,
+            GUEST_MEM_HOOK_DATA_BASE, GUEST_MEM_HOOK_DATA_BASE + 0xFFF);
+    }
     if (err != CPUEAXH_ERR_OK) {
         std::cerr << "cpueaxh_hook_add(memory) failed: " << cpueaxh_err_string(err)
             << " (" << err << ")" << std::endl;
         if (fetch_hook) cpueaxh_hook_del(engine, fetch_hook);
         if (read_hook) cpueaxh_hook_del(engine, read_hook);
         if (write_hook) cpueaxh_hook_del(engine, write_hook);
+        if (read_unmapped_hook) cpueaxh_hook_del(engine, read_unmapped_hook);
         cpueaxh_close(engine);
         return;
     }
@@ -150,10 +193,39 @@ inline void run_guest_hook_mem_demo() {
             << " = 0x" << std::setw(16) << result_value << std::dec << std::endl;
     }
 
+    std::cout << "\n-- rerun after unmapping the data page --" << std::endl;
+    cpueaxh_mem_unmap(engine, GUEST_MEM_HOOK_DATA_BASE, 0x1000);
+
+    uint64_t value = GUEST_MEM_HOOK_STACK_BASE + GUEST_MEM_HOOK_STACK_SIZE - 0x80;
+    cpueaxh_reg_write(engine, CPUEAXH_X86_REG_RSP, &value);
+    cpueaxh_reg_write(engine, CPUEAXH_X86_REG_RBP, &value);
+
+    value = GUEST_MEM_HOOK_CODE_BASE;
+    cpueaxh_reg_write(engine, CPUEAXH_X86_REG_RIP, &value);
+
+    value = 0;
+    cpueaxh_reg_write(engine, CPUEAXH_X86_REG_RAX, &value);
+
+    err = cpueaxh_emu_start(engine, GUEST_MEM_HOOK_CODE_BASE, GUEST_MEM_HOOK_CODE_BASE + sizeof(GUEST_MEM_HOOK_CODE), 0, 0);
+    std::cout << "guest memory hook recovered result: " << cpueaxh_err_string(err)
+        << " (" << err << ")" << std::endl;
+
+    result_value = 0;
+    read_err = cpueaxh_mem_read(engine, GUEST_MEM_HOOK_RESULT_ADDRESS, &result_value, sizeof(result_value));
+    if (read_err != CPUEAXH_ERR_OK) {
+        std::cerr << "cpueaxh_mem_read(recovered result) failed: " << cpueaxh_err_string(read_err)
+            << " (" << read_err << ")" << std::endl;
+    }
+    else {
+        std::cout << "recovered result @ 0x" << std::hex << std::setfill('0') << std::setw(16) << GUEST_MEM_HOOK_RESULT_ADDRESS
+            << " = 0x" << std::setw(16) << result_value << std::dec << std::endl;
+    }
+
     print_context(engine, "guest memory hook after");
 
     cpueaxh_hook_del(engine, fetch_hook);
     cpueaxh_hook_del(engine, read_hook);
     cpueaxh_hook_del(engine, write_hook);
+    cpueaxh_hook_del(engine, read_unmapped_hook);
     cpueaxh_close(engine);
 }

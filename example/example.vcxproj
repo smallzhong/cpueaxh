@@ -160,6 +160,7 @@
     <ClInclude Include="demo\examples\guest_hook\guest_hook_common.hpp" />
     <ClInclude Include="demo\examples\guest_hook\guest_hook_exact.hpp" />
     <ClInclude Include="demo\examples\guest_hook\guest_hook_mem.hpp" />
+    <ClInclude Include="demo\examples\guest_hook\guest_hook_mem_invalid.hpp" />
     <ClInclude Include="demo\examples\guest_hook\guest_hook_post.hpp" />
     <ClInclude Include="demo\examples\guest_hook\guest_hook_pre.hpp" />
     <ClInclude Include="demo\examples\host.hpp" />

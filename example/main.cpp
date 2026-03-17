@@ -18,6 +18,7 @@
 #include "demo/examples/guest.hpp"
 #include "demo/examples/guest_hook/guest_hook_common.hpp"
 #include "demo/examples/guest_hook/guest_hook_mem.hpp"
+#include "demo/examples/guest_hook/guest_hook_mem_invalid.hpp"
 #include "demo/examples/guest_hook/guest_hook_pre.hpp"
 #include "demo/examples/guest_hook/guest_hook_post.hpp"
 #include "demo/examples/guest_hook/guest_hook_exact.hpp"
@@ -41,50 +42,57 @@ static void finish_demo() {
 int main() {
     // guest mode
     present_demo(
-        "[1/7] guest basic demo",
+        "[1/8] guest basic demo",
         "Demonstrates basic guest-mode execution and register changes.",
         "The demo ends with CPUEAXH_ERR_OK and the after-state registers differ from the before-state as expected.");
     run_simple_function_demo();
     finish_demo();
 
     present_demo(
-        "[2/7] guest hook pre demo",
+        "[2/8] guest hook pre demo",
         "Demonstrates a pre-execution hook that prints the current address and the next 16 bytes.",
         "You should see multiple lines starting with 'hook @', followed by CPUEAXH_ERR_OK.");
     run_guest_hook_pre_demo();
     finish_demo();
 
     present_demo(
-        "[3/7] guest hook post demo",
+        "[3/8] guest hook post demo",
         "Demonstrates a post-execution hook that prints RIP after the instruction finishes.",
         "You should see multiple lines starting with 'post @' showing RIP changes, followed by CPUEAXH_ERR_OK.");
     run_guest_hook_post_demo();
     finish_demo();
 
     present_demo(
-        "[4/7] guest hook exact demo",
+        "[4/8] guest hook exact demo",
         "Demonstrates an exact-address hook that triggers only at one specific address.",
         "You should see exactly one 'exact hook hit @' line for the target address, followed by CPUEAXH_ERR_OK.");
     run_guest_hook_exact_demo();
     finish_demo();
 
     present_demo(
-        "[5/7] guest memory hook demo",
-        "Demonstrates Unicorn-like memory access hooks for instruction fetch, memory read, and memory write during emulation.",
-        "You should see 'mem-fetch', 'mem-read', and 'mem-write' lines, followed by a written result value and CPUEAXH_ERR_OK.");
+        "[5/8] guest memory hook demo",
+        "Demonstrates Unicorn-like memory access hooks for successful accesses plus a recoverable unmapped read callback.",
+        "You should first see 'mem-fetch', 'mem-read', and 'mem-write', then a second run with 'mem-read-unmapped -> recovering' and a final CPUEAXH_ERR_OK.");
     run_guest_hook_mem_demo();
+    finish_demo();
+
+    present_demo(
+        "[6/8] guest invalid memory recovery demo",
+        "Demonstrates Unicorn-style invalid memory hooks recovering both an unmapped read and a write-protection fault in one execution.",
+        "You should see one 'mem-read-unmapped' hit, one 'mem-write-prot' hit, and a final 'invalid memory recovery test: PASS'.");
+    run_guest_hook_mem_invalid_demo();
     finish_demo();
 
     // host mode
     present_demo(
-        "[6/7] host message box demo",
+        "[7/8] host message box demo",
         "Demonstrates host-mode execution that calls the host-side MessageBox logic.",
         "A MessageBox should appear and the demo should complete without an error.");
     run_message_box_demo();
     finish_demo();
 
     present_demo(
-        "[7/7] host memory patch demo",
+        "[8/8] host memory patch demo",
         "Demonstrates host-mode memory patches that override reads and writes for specific host addresses during emulation.",
         "The MessageBox should show the patched text and caption, and the printed host-side strings should remain original after deleting the patches.");
     run_message_box_patch_demo();

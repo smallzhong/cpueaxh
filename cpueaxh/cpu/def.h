@@ -14,6 +14,12 @@ struct cpueaxh_engine;
 #define CPUEAXH_HOOK_MEM_READ 3u
 #define CPUEAXH_HOOK_MEM_WRITE 4u
 #define CPUEAXH_HOOK_MEM_FETCH 5u
+#define CPUEAXH_HOOK_MEM_READ_UNMAPPED 6u
+#define CPUEAXH_HOOK_MEM_WRITE_UNMAPPED 7u
+#define CPUEAXH_HOOK_MEM_FETCH_UNMAPPED 8u
+#define CPUEAXH_HOOK_MEM_READ_PROT 9u
+#define CPUEAXH_HOOK_MEM_WRITE_PROT 10u
+#define CPUEAXH_HOOK_MEM_FETCH_PROT 11u
 #endif
 
 // RFLAGS bit definitions
@@ -166,6 +172,7 @@ struct CPU_CONTEXT {
 };
 
 void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value);
+bool cpu_notify_invalid_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value);
 
 inline bool cpu_has_exception(const CPU_CONTEXT* ctx) {
     return ctx && ctx->exception.code != CPU_EXCEPTION_NONE;

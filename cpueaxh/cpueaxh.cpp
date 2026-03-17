@@ -25,6 +25,7 @@ struct CPUEAXH_HOOK_ENTRY {
     uint32_t type;
     cpueaxh_cb_hookcode_t code_callback;
     cpueaxh_cb_hookmem_t mem_callback;
+    cpueaxh_cb_hookmem_invalid_t invalid_mem_callback;
     void* user_data;
     uint64_t begin;
     uint64_t end;
@@ -138,7 +139,18 @@ static bool cpueaxh_range_contains(uint64_t begin, uint64_t end, uint64_t addres
 
 static bool cpueaxh_is_supported_hook_type(uint32_t type) {
     return type == CPUEAXH_HOOK_CODE_PRE || type == CPUEAXH_HOOK_CODE_POST ||
-        type == CPUEAXH_HOOK_MEM_READ || type == CPUEAXH_HOOK_MEM_WRITE || type == CPUEAXH_HOOK_MEM_FETCH;
+        type == CPUEAXH_HOOK_MEM_READ || type == CPUEAXH_HOOK_MEM_WRITE || type == CPUEAXH_HOOK_MEM_FETCH ||
+        type == CPUEAXH_HOOK_MEM_READ_UNMAPPED || type == CPUEAXH_HOOK_MEM_WRITE_UNMAPPED || type == CPUEAXH_HOOK_MEM_FETCH_UNMAPPED ||
+        type == CPUEAXH_HOOK_MEM_READ_PROT || type == CPUEAXH_HOOK_MEM_WRITE_PROT || type == CPUEAXH_HOOK_MEM_FETCH_PROT;
+}
+
+static bool cpueaxh_is_code_hook_type(uint32_t type) {
+    return type == CPUEAXH_HOOK_CODE_PRE || type == CPUEAXH_HOOK_CODE_POST;
+}
+
+static bool cpueaxh_is_invalid_memory_hook_type(uint32_t type) {
+    return type == CPUEAXH_HOOK_MEM_READ_UNMAPPED || type == CPUEAXH_HOOK_MEM_WRITE_UNMAPPED || type == CPUEAXH_HOOK_MEM_FETCH_UNMAPPED ||
+        type == CPUEAXH_HOOK_MEM_READ_PROT || type == CPUEAXH_HOOK_MEM_WRITE_PROT || type == CPUEAXH_HOOK_MEM_FETCH_PROT;
 }
 
 void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value) {
@@ -159,6 +171,31 @@ void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, s
 
         hook->mem_callback(engine, type, address, size, value, hook->user_data);
     }
+}
+
+bool cpu_notify_invalid_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value) {
+    if (!ctx || !ctx->owner_engine) {
+        return false;
+    }
+
+    bool handled = false;
+    cpueaxh_engine* engine = ctx->owner_engine;
+    for (int index = 0; index < CPUEAXH_MAX_HOOKS; index++) {
+        CPUEAXH_HOOK_ENTRY* hook = &engine->hooks[index];
+        if (!hook->used || hook->type != type || !hook->invalid_mem_callback) {
+            continue;
+        }
+
+        if (!cpueaxh_range_contains(hook->begin, hook->end, address)) {
+            continue;
+        }
+
+        if (hook->invalid_mem_callback(engine, type, address, size, value, hook->user_data) != 0) {
+            handled = true;
+        }
+    }
+
+    return handled;
 }
 
 static cpueaxh_escape_insn_id cpueaxh_classify_escape_instruction(const uint8_t* bytes, int fetched, uint32_t* instruction_size) {
@@ -952,8 +989,12 @@ extern "C" cpueaxh_err cpueaxh_hook_add(cpueaxh_engine* engine, cpueaxh_hook* ou
         engine->hooks[index].type = type;
         engine->hooks[index].code_callback = 0;
         engine->hooks[index].mem_callback = 0;
-        if (type == CPUEAXH_HOOK_CODE_PRE || type == CPUEAXH_HOOK_CODE_POST) {
+        engine->hooks[index].invalid_mem_callback = 0;
+        if (cpueaxh_is_code_hook_type(type)) {
             engine->hooks[index].code_callback = (cpueaxh_cb_hookcode_t)callback;
+        }
+        else if (cpueaxh_is_invalid_memory_hook_type(type)) {
+            engine->hooks[index].invalid_mem_callback = (cpueaxh_cb_hookmem_invalid_t)callback;
         }
         else {
             engine->hooks[index].mem_callback = (cpueaxh_cb_hookmem_t)callback;
