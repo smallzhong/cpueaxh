@@ -392,6 +392,9 @@ int cpu_step(CPU_CONTEXT* ctx) {
             execute_cmpxchg8b16b(ctx, buf, (size_t)fetched);
         }
     }
+    else if (opc == 0x0F3A && mandatory_prefix == 0x66 && is_aeskeygenassist_instruction(buf, fetched, prefix_len)) {
+        execute_aeskeygenassist(ctx, buf, (size_t)fetched);
+    }
     else if (opc == 0x0F3A && mandatory_prefix == 0x66 && is_pcmpistri_instruction(buf, fetched, prefix_len)) {
         execute_pcmpistri(ctx, buf, (size_t)fetched);
     }

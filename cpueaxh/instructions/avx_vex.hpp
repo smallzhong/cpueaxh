@@ -879,6 +879,7 @@ static DecodedInstruction decode_avx_vex_0f3a_modrm_imm(CPU_CONTEXT* ctx, uint8_
     case 0x16:
     case 0x20:
     case 0x22:
+    case 0xDF:
     case 0x42:
         decode_modrm_sse2_mov_int(ctx, &inst, code, code_size, &offset, false);
         break;
@@ -4034,6 +4035,18 @@ void execute_avx_vex(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
             else {
                 set_xmm128(ctx, dest, apply_avx_insertps_mem128(src1, read_memory_dword(ctx, inst.mem_address), imm8));
             }
+            clear_ymm_upper128(ctx, dest);
+            return;
+        }
+        if (opcode == 0xDF) {
+            if (is_256 || avx_vex_requires_reserved_vvvv(&prefix)) {
+                raise_ud();
+            }
+
+            DecodedInstruction inst = decode_avx_vex_0f3a_modrm_imm(ctx, code, code_size, &prefix);
+            int dest = avx_vex_dest_index(ctx, inst.modrm);
+            XMMRegister source = read_avx_int_rm128(ctx, &inst);
+            set_xmm128(ctx, dest, apply_aeskeygenassist128(source, (uint8_t)inst.immediate));
             clear_ymm_upper128(ctx, dest);
             return;
         }
