@@ -18,6 +18,9 @@
     <ClInclude Include="demo\examples\guest_hook\guest_hook_exact.hpp">
       <Filter>demo</Filter>
     </ClInclude>
+    <ClInclude Include="demo\examples\guest_hook\guest_hook_mem.hpp">
+      <Filter>demo</Filter>
+    </ClInclude>
     <ClInclude Include="demo\examples\guest_hook\guest_hook_post.hpp">
       <Filter>demo</Filter>
     </ClInclude>

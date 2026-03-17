@@ -83,12 +83,15 @@ In addition to normal `R/W/X` page permissions, the engine supports CPU-visible 
 This allows the emulator to raise proper page faults when CPL and page attributes do not match, rather than degrading to a generic access failure.
 
 ### 7. Hooking and escape mechanism
-The engine supports basic code hooks and instruction escape handling:
+The engine supports basic code hooks, Unicorn-like memory access hooks, and instruction escape handling:
 - `cpueaxh_hook_add()` / `cpueaxh_hook_del()`
 - `cpueaxh_hook_add_address()` for exact-address hooks
 - `CPUEAXH_HOOK_CODE_PRE` and `CPUEAXH_HOOK_CODE_POST`
+- `CPUEAXH_HOOK_MEM_READ`, `CPUEAXH_HOOK_MEM_WRITE`, and `CPUEAXH_HOOK_MEM_FETCH`
 - `cpueaxh_escape_add()` / `cpueaxh_escape_del()`
 - `cpueaxh_host_call()` for bridging an escape into native execution
+
+Memory-access hooks are range-filterable and can observe successful instruction fetches, memory reads, and memory writes during emulation together with address, access size, and value.
 
 An escape is intended for handing selected instructions off from the emulator to a real host-side execution path.
 The escape callback receives the decoded instruction bytes together with a mutable `cpueaxh_x86_context`, and may either emulate the instruction manually in `C/C++` or transfer execution through `cpueaxh_host_call()`.
@@ -230,8 +233,10 @@ Major coverage includes:
   - instruction and instruction-family implementations
 - [example](example)
   - example program
+- [kcpueaxh](kcpueaxh)
+  - kernel-mode static library variant of the core
 - [kexample](kexample)
-  - KMDF kernel usage sample that compiles the same `cpueaxh` core sources directly in kernel mode
+  - KMDF kernel usage sample that links against `kcpueaxh`
 - [cpueaxh.sln](cpueaxh.sln)
   - Visual Studio solution
 
@@ -267,9 +272,16 @@ Major coverage includes:
 - `cpueaxh_emu_stop()`
 
 ### Hooking / escape
+- `cpueaxh_cb_hookcode_t`
+- `cpueaxh_cb_hookmem_t`
 - `cpueaxh_hook_add()`
 - `cpueaxh_hook_add_address()`
 - `cpueaxh_hook_del()`
+- `CPUEAXH_HOOK_CODE_PRE`
+- `CPUEAXH_HOOK_CODE_POST`
+- `CPUEAXH_HOOK_MEM_READ`
+- `CPUEAXH_HOOK_MEM_WRITE`
+- `CPUEAXH_HOOK_MEM_FETCH`
 - `cpueaxh_escape_add()`
 - `cpueaxh_escape_del()`
 - `cpueaxh_host_call()`
@@ -316,13 +328,14 @@ The example is located in [example/main.cpp](example/main.cpp) and includes:
 - a guest pre-hook demo that prints the current address and the next 16 bytes
 - a guest post-hook demo that prints the post-instruction `RIP`
 - a guest exact-address hook demo
+- a guest memory-access hook demo for fetch/read/write events
 - a host-mode `MessageBoxA` execution demo
 - a host-mode memory patch demo
 - default escape handlers covering `syscall`, `sysenter`, `int`, `int3`, `cpuid`, `xgetbv`, `rdtsc`, `rdtscp`, `rdrand`, `hlt`, `in`, and `out`
 
 The example project currently has no external library dependency beyond the Windows / MSVC toolchain and uses MASM for the native escape bridge samples.
 
-The kernel sample is located in [kexample/main.cpp](kexample/main.cpp). It demonstrates guest-mode execution inside a KMDF non-PnP driver and builds the same core source files directly with the kernel toolchain so the emulator implementation remains shared between user mode and kernel mode.
+The kernel sample is located in [kexample/main.cpp](kexample/main.cpp). It demonstrates host-mode execution inside a KMDF non-PnP driver and links against the kernel-mode static library [kcpueaxh](kcpueaxh), so the emulator implementation remains shared between user mode and kernel mode.
 
 ## Build
 

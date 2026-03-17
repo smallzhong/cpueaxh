@@ -6,6 +6,15 @@
 
 struct MEMORY_MANAGER;
 struct CPU_CONTEXT;
+struct cpueaxh_engine;
+
+#ifndef CPUEAXH_HOOK_CODE_PRE
+#define CPUEAXH_HOOK_CODE_PRE 1u
+#define CPUEAXH_HOOK_CODE_POST 2u
+#define CPUEAXH_HOOK_MEM_READ 3u
+#define CPUEAXH_HOOK_MEM_WRITE 4u
+#define CPUEAXH_HOOK_MEM_FETCH 5u
+#endif
 
 // RFLAGS bit definitions
 #define RFLAGS_CF  (1ULL << 0)
@@ -138,6 +147,7 @@ struct CPU_CONTEXT {
     uint16_t ldtr_limit;
 
     MEMORY_MANAGER* mem_mgr;
+    cpueaxh_engine* owner_engine;
 
     bool rex_present;
     bool rex_w;
@@ -154,6 +164,8 @@ struct CPU_CONTEXT {
 
     CPU_EXCEPTION_STATE exception;
 };
+
+void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value);
 
 inline bool cpu_has_exception(const CPU_CONTEXT* ctx) {
     return ctx && ctx->exception.code != CPU_EXCEPTION_NONE;

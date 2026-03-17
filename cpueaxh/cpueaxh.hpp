@@ -23,6 +23,7 @@ typedef uint64_t cpueaxh_escape_handle;
 typedef uint32_t cpueaxh_escape_insn_id;
 typedef cpueaxh_escape_insn_id cpueaxh_insn_id;
 typedef void (*cpueaxh_cb_hookcode_t)(cpueaxh_engine* engine, uint64_t address, void* user_data);
+typedef void (*cpueaxh_cb_hookmem_t)(cpueaxh_engine* engine, uint32_t type, uint64_t address, size_t size, uint64_t value, void* user_data);
 typedef void (*cpueaxh_cb_host_bridge_t)(void);
 
 typedef struct cpueaxh_x86_xmm {
@@ -117,6 +118,9 @@ typedef cpueaxh_err (*cpueaxh_cb_escape_t)(cpueaxh_engine* engine, cpueaxh_x86_c
 
 #define CPUEAXH_HOOK_CODE_PRE 1u
 #define CPUEAXH_HOOK_CODE_POST 2u
+#define CPUEAXH_HOOK_MEM_READ 3u
+#define CPUEAXH_HOOK_MEM_WRITE 4u
+#define CPUEAXH_HOOK_MEM_FETCH 5u
 
 #define CPUEAXH_ESCAPE_INSN_NONE 0u
 #define CPUEAXH_ESCAPE_INSN_SYSCALL 1u

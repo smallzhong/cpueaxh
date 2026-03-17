@@ -24,6 +24,7 @@ struct CPUEAXH_HOOK_ENTRY {
     cpueaxh_hook handle;
     uint32_t type;
     cpueaxh_cb_hookcode_t code_callback;
+    cpueaxh_cb_hookmem_t mem_callback;
     void* user_data;
     uint64_t begin;
     uint64_t end;
@@ -136,7 +137,28 @@ static bool cpueaxh_range_contains(uint64_t begin, uint64_t end, uint64_t addres
 }
 
 static bool cpueaxh_is_supported_hook_type(uint32_t type) {
-    return type == CPUEAXH_HOOK_CODE_PRE || type == CPUEAXH_HOOK_CODE_POST;
+    return type == CPUEAXH_HOOK_CODE_PRE || type == CPUEAXH_HOOK_CODE_POST ||
+        type == CPUEAXH_HOOK_MEM_READ || type == CPUEAXH_HOOK_MEM_WRITE || type == CPUEAXH_HOOK_MEM_FETCH;
+}
+
+void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value) {
+    if (!ctx || !ctx->owner_engine) {
+        return;
+    }
+
+    cpueaxh_engine* engine = ctx->owner_engine;
+    for (int index = 0; index < CPUEAXH_MAX_HOOKS; index++) {
+        CPUEAXH_HOOK_ENTRY* hook = &engine->hooks[index];
+        if (!hook->used || hook->type != type || !hook->mem_callback) {
+            continue;
+        }
+
+        if (!cpueaxh_range_contains(hook->begin, hook->end, address)) {
+            continue;
+        }
+
+        hook->mem_callback(engine, type, address, size, value, hook->user_data);
+    }
 }
 
 static cpueaxh_escape_insn_id cpueaxh_classify_escape_instruction(const uint8_t* bytes, int fetched, uint32_t* instruction_size) {
@@ -581,6 +603,7 @@ extern "C" cpueaxh_err cpueaxh_open(uint32_t arch, uint32_t mode, cpueaxh_engine
 
     mm_init(&engine->memory_manager);
     init_cpu_context(&engine->context, &engine->memory_manager);
+    engine->context.owner_engine = engine;
     engine->next_hook = 1;
     engine->memory_mode = CPUEAXH_MEMORY_MODE_GUEST;
     cpueaxh_apply_memory_mode(engine, CPUEAXH_MEMORY_MODE_GUEST);
@@ -927,7 +950,14 @@ extern "C" cpueaxh_err cpueaxh_hook_add(cpueaxh_engine* engine, cpueaxh_hook* ou
         engine->hooks[index].used = true;
         engine->hooks[index].handle = engine->next_hook++;
         engine->hooks[index].type = type;
-        engine->hooks[index].code_callback = (cpueaxh_cb_hookcode_t)callback;
+        engine->hooks[index].code_callback = 0;
+        engine->hooks[index].mem_callback = 0;
+        if (type == CPUEAXH_HOOK_CODE_PRE || type == CPUEAXH_HOOK_CODE_POST) {
+            engine->hooks[index].code_callback = (cpueaxh_cb_hookcode_t)callback;
+        }
+        else {
+            engine->hooks[index].mem_callback = (cpueaxh_cb_hookmem_t)callback;
+        }
         engine->hooks[index].user_data = user_data;
         engine->hooks[index].begin = begin;
         engine->hooks[index].end = end;

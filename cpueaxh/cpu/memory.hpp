@@ -55,7 +55,9 @@ inline uint8_t read_memory_byte(CPU_CONTEXT* ctx, uint64_t address) {
     if (cpu_resolve_memory_access(ctx, address, MM_PROT_READ, &ptr) != MM_ACCESS_OK) {
         return 0;
     }
-    return *ptr;
+    uint8_t value = *ptr;
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 1, value);
+    return value;
 }
 
 inline uint8_t read_memory_exec_byte(CPU_CONTEXT* ctx, uint64_t address) {
@@ -63,7 +65,9 @@ inline uint8_t read_memory_exec_byte(CPU_CONTEXT* ctx, uint64_t address) {
     if (cpu_resolve_memory_access(ctx, address, MM_PROT_EXEC, &ptr) != MM_ACCESS_OK) {
         return 0;
     }
-    return *ptr;
+    uint8_t value = *ptr;
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_FETCH, address, 1, value);
+    return value;
 }
 
 inline void write_memory_byte(CPU_CONTEXT* ctx, uint64_t address, uint8_t value) {
@@ -71,31 +75,36 @@ inline void write_memory_byte(CPU_CONTEXT* ctx, uint64_t address, uint8_t value)
     if (cpu_resolve_memory_access(ctx, address, MM_PROT_WRITE, &ptr) != MM_ACCESS_OK) {
         return;
     }
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 1, value);
     *ptr = value;
 }
 
-inline uint8_t* get_memory_write_ptr(CPU_CONTEXT* ctx, uint64_t address, size_t size) {
+inline uint8_t* cpu_get_contiguous_ptr(CPU_CONTEXT* ctx, uint64_t address, size_t size, uint32_t access) {
     if (!ctx || size == 0 || cpu_has_exception(ctx)) {
         return NULL;
     }
 
     uint8_t* base_ptr = NULL;
-    if (cpu_resolve_memory_access(ctx, address, MM_PROT_WRITE, &base_ptr) != MM_ACCESS_OK) {
+    if (cpu_resolve_memory_access(ctx, address, access, &base_ptr) != MM_ACCESS_OK) {
         return NULL;
     }
 
     for (size_t offset = 1; offset < size; offset++) {
         uint8_t* next_ptr = NULL;
-        if (cpu_resolve_memory_access(ctx, address + offset, MM_PROT_WRITE, &next_ptr) != MM_ACCESS_OK) {
+        if (cpu_resolve_memory_access(ctx, address + offset, access, &next_ptr) != MM_ACCESS_OK) {
             return NULL;
         }
         if (next_ptr != base_ptr + offset) {
-            cpu_raise_page_fault(ctx, MM_PROT_WRITE, true);
+            cpu_raise_page_fault(ctx, access, true);
             return NULL;
         }
     }
 
     return base_ptr;
+}
+
+inline uint8_t* get_memory_write_ptr(CPU_CONTEXT* ctx, uint64_t address, size_t size) {
+    return cpu_get_contiguous_ptr(ctx, address, size, MM_PROT_WRITE);
 }
 
 inline bool cpu_is_host_write_passthrough(CPU_CONTEXT* ctx) {
@@ -107,10 +116,12 @@ inline uint16_t read_memory_word(CPU_CONTEXT* ctx, uint64_t address) {
         return 0;
     }
 
-    uint16_t value = 0;
-    for (int i = 0; i < 2; i++) {
-        value |= ((uint16_t)read_memory_byte(ctx, address + i)) << (i * 8);
+    uint8_t* ptr = cpu_get_contiguous_ptr(ctx, address, 2, MM_PROT_READ);
+    if (!ptr) {
+        return 0;
     }
+    uint16_t value = (uint16_t)ptr[0] | ((uint16_t)ptr[1] << 8);
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 2, value);
     return value;
 }
 
@@ -119,9 +130,13 @@ inline void write_memory_word(CPU_CONTEXT* ctx, uint64_t address, uint16_t value
         return;
     }
 
-    for (int i = 0; i < 2; i++) {
-        write_memory_byte(ctx, address + i, (uint8_t)((value >> (i * 8)) & 0xFF));
+    uint8_t* ptr = get_memory_write_ptr(ctx, address, 2);
+    if (!ptr) {
+        return;
     }
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 2, value);
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
 }
 
 inline uint32_t read_memory_dword(CPU_CONTEXT* ctx, uint64_t address) {
@@ -129,10 +144,15 @@ inline uint32_t read_memory_dword(CPU_CONTEXT* ctx, uint64_t address) {
         return 0;
     }
 
-    uint32_t value = 0;
-    for (int i = 0; i < 4; i++) {
-        value |= ((uint32_t)read_memory_byte(ctx, address + i)) << (i * 8);
+    uint8_t* ptr = cpu_get_contiguous_ptr(ctx, address, 4, MM_PROT_READ);
+    if (!ptr) {
+        return 0;
     }
+    uint32_t value = (uint32_t)ptr[0] |
+        ((uint32_t)ptr[1] << 8) |
+        ((uint32_t)ptr[2] << 16) |
+        ((uint32_t)ptr[3] << 24);
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 4, value);
     return value;
 }
 
@@ -141,9 +161,15 @@ inline void write_memory_dword(CPU_CONTEXT* ctx, uint64_t address, uint32_t valu
         return;
     }
 
-    for (int i = 0; i < 4; i++) {
-        write_memory_byte(ctx, address + i, (uint8_t)((value >> (i * 8)) & 0xFF));
+    uint8_t* ptr = get_memory_write_ptr(ctx, address, 4);
+    if (!ptr) {
+        return;
     }
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 4, value);
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[3] = (uint8_t)((value >> 24) & 0xFF);
 }
 
 inline uint64_t read_memory_qword(CPU_CONTEXT* ctx, uint64_t address) {
@@ -151,10 +177,19 @@ inline uint64_t read_memory_qword(CPU_CONTEXT* ctx, uint64_t address) {
         return 0;
     }
 
-    uint64_t value = 0;
-    for (int i = 0; i < 8; i++) {
-        value |= ((uint64_t)read_memory_byte(ctx, address + i)) << (i * 8);
+    uint8_t* ptr = cpu_get_contiguous_ptr(ctx, address, 8, MM_PROT_READ);
+    if (!ptr) {
+        return 0;
     }
+    uint64_t value = (uint64_t)ptr[0] |
+        ((uint64_t)ptr[1] << 8) |
+        ((uint64_t)ptr[2] << 16) |
+        ((uint64_t)ptr[3] << 24) |
+        ((uint64_t)ptr[4] << 32) |
+        ((uint64_t)ptr[5] << 40) |
+        ((uint64_t)ptr[6] << 48) |
+        ((uint64_t)ptr[7] << 56);
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 8, value);
     return value;
 }
 
@@ -163,9 +198,19 @@ inline void write_memory_qword(CPU_CONTEXT* ctx, uint64_t address, uint64_t valu
         return;
     }
 
-    for (int i = 0; i < 8; i++) {
-        write_memory_byte(ctx, address + i, (uint8_t)((value >> (i * 8)) & 0xFF));
+    uint8_t* ptr = get_memory_write_ptr(ctx, address, 8);
+    if (!ptr) {
+        return;
     }
+    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 8, value);
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[3] = (uint8_t)((value >> 24) & 0xFF);
+    ptr[4] = (uint8_t)((value >> 32) & 0xFF);
+    ptr[5] = (uint8_t)((value >> 40) & 0xFF);
+    ptr[6] = (uint8_t)((value >> 48) & 0xFF);
+    ptr[7] = (uint8_t)((value >> 56) & 0xFF);
 }
 
 inline uint64_t cpu_memory_operand_mask(int operand_size) {
