@@ -175,6 +175,7 @@
     <ClInclude Include="instructions\pushf.hpp" />
     <ClInclude Include="instructions\rdtsc.hpp" />
     <ClInclude Include="instructions\rdtscp.hpp" />
+    <ClInclude Include="instructions\rdssp.hpp" />
     <ClInclude Include="instructions\rep.hpp" />
     <ClInclude Include="instructions\ret.hpp" />
     <ClInclude Include="instructions\rol.hpp" />

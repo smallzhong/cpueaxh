@@ -106,6 +106,7 @@ The escape mechanism currently supports dispatch for these instruction classes:
 - `syscall`, `sysenter`
 - `int`, `int3`, `hlt`
 - `cpuid`, `xgetbv`, `rdtsc`, `rdtscp`, `rdrand`
+- `rdsspd`, `rdsspq`
 - port I/O instructions `in` and `out`
 
 Escape callbacks are registered per instruction class, can be constrained to an address range, and the current implementation allows one registered escape per instruction class.
@@ -341,7 +342,7 @@ The example is located in [example/main.cpp](example/main.cpp) and includes:
 - a guest invalid-memory recovery demo for `READ_UNMAPPED` and `WRITE_PROT`
 - a host-mode `MessageBoxA` execution demo
 - a host-mode memory patch demo
-- default escape handlers covering `syscall`, `sysenter`, `int`, `int3`, `cpuid`, `xgetbv`, `rdtsc`, `rdtscp`, `rdrand`, `hlt`, `in`, and `out`
+- default escape handlers covering `syscall`, `sysenter`, `int`, `int3`, `cpuid`, `xgetbv`, `rdtsc`, `rdtscp`, `rdrand`, `rdsspd`, `rdsspq`, `hlt`, `in`, and `out`
 
 The example project currently has no external library dependency beyond the Windows / MSVC toolchain and uses MASM for the native escape bridge samples.
 

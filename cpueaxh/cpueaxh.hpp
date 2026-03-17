@@ -144,6 +144,8 @@ typedef cpueaxh_err (*cpueaxh_cb_escape_t)(cpueaxh_engine* engine, cpueaxh_x86_c
 #define CPUEAXH_ESCAPE_INSN_OUT 12u
 #define CPUEAXH_ESCAPE_INSN_WRITECRX 13u
 #define CPUEAXH_ESCAPE_INSN_READCRX 14u
+#define CPUEAXH_ESCAPE_INSN_RDSSPD 15u
+#define CPUEAXH_ESCAPE_INSN_RDSSPQ 16u
 
 #define CPUEAXH_EXCEPTION_NONE ((uint32_t)0u)
 #define CPUEAXH_EXCEPTION_DE ((uint32_t)0xE0000000u)

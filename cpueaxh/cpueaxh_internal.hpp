@@ -98,6 +98,7 @@
 #include "instructions/bswap.hpp"
 #include "instructions/rdtsc.hpp"
 #include "instructions/rdtscp.hpp"
+#include "instructions/rdssp.hpp"
 #include "instructions\rdrand.hpp"
 #include "instructions\xgetbv.hpp"
 #include "instructions\pcmpistri.hpp"

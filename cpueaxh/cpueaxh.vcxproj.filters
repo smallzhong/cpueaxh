@@ -177,6 +177,9 @@
     <ClInclude Include="instructions\rdtscp.hpp">
       <Filter>instructions</Filter>
     </ClInclude>
+    <ClInclude Include="instructions\rdssp.hpp">
+      <Filter>instructions</Filter>
+    </ClInclude>
     <ClInclude Include="instructions\rep.hpp">
       <Filter>instructions</Filter>
     </ClInclude>

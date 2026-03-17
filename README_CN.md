@@ -106,6 +106,7 @@ escape 回调会收到已解码的指令字节以及一个可修改的 `cpueaxh_
 - `syscall`, `sysenter`
 - `int`, `int3`, `hlt`
 - `cpuid`, `xgetbv`, `rdtsc`, `rdtscp`, `rdrand`
+- `rdsspd`, `rdsspq`
 - 端口 I/O 指令 `in` 与 `out`
 
 escape 回调按“指令类别”注册，可限制生效地址范围；当前实现中，每种指令类别只允许注册一个 escape。
@@ -341,7 +342,7 @@ if (cpueaxh_mem_regions(engine, &regions, &count) == CPUEAXH_ERR_OK) {
 - guest 非法内存恢复示例：恢复 `READ_UNMAPPED` 与 `WRITE_PROT`
 - host 模式 `MessageBoxA` 执行示例
 - host 模式内存补丁示例
-- 默认 escape 处理器，覆盖 `syscall`、`sysenter`、`int`、`int3`、`cpuid`、`xgetbv`、`rdtsc`、`rdtscp`、`rdrand`、`hlt`、`in`、`out`
+- 默认 escape 处理器，覆盖 `syscall`、`sysenter`、`int`、`int3`、`cpuid`、`xgetbv`、`rdtsc`、`rdtscp`、`rdrand`、`rdsspd`、`rdsspq`、`hlt`、`in`、`out`
 
 当前示例项目除 Windows / MSVC 工具链外不依赖其他外部库，并使用 MASM 展示原生 escape 桥接样例。
 

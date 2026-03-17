@@ -283,6 +283,10 @@ static cpueaxh_escape_insn_id cpueaxh_classify_escape_instruction(const uint8_t*
         *instruction_size = (uint32_t)(prefix_len + 3);
         return CPUEAXH_ESCAPE_INSN_WRITECRX;
     }
+    bool is_rdssp_64 = false;
+    if (opc == 0x0F1E && is_rdssp_instruction(bytes, (size_t)fetched, &is_rdssp_64, instruction_size)) {
+        return is_rdssp_64 ? CPUEAXH_ESCAPE_INSN_RDSSPQ : CPUEAXH_ESCAPE_INSN_RDSSPD;
+    }
     return CPUEAXH_ESCAPE_INSN_NONE;
 }
 
