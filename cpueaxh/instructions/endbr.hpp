@@ -130,5 +130,28 @@ inline DecodedInstruction decode_endbr_instruction(CPU_CONTEXT* ctx, uint8_t* co
 }
 
 inline void execute_endbr(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
-    decode_endbr_instruction(ctx, code, code_size);
+    if (!ctx) {
+        return;
+    }
+
+    if (!probe_endbr_instruction(code, code_size)) {
+        raise_ud();
+        return;
+    }
+
+    size_t offset = 0;
+    while (offset < code_size) {
+        uint8_t prefix = code[offset];
+        if (prefix == 0x66 || prefix == 0x67 ||
+            (prefix >= 0x40 && prefix <= 0x4F) ||
+            prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
+            prefix == 0x64 || prefix == 0x65 || prefix == 0xF2 || prefix == 0xF3) {
+            offset++;
+        }
+        else {
+            break;
+        }
+    }
+
+    ctx->last_inst_size = (int)(offset + 3);
 }

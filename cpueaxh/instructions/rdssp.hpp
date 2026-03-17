@@ -152,5 +152,15 @@ inline DecodedInstruction decode_rdssp_instruction(CPU_CONTEXT* ctx, uint8_t* co
 }
 
 inline void execute_rdssp(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
-    decode_rdssp_instruction(ctx, code, code_size);
+    if (!ctx) {
+        return;
+    }
+
+    uint32_t instruction_size = 0;
+    if (!probe_rdssp_instruction(code, code_size, NULL, &instruction_size)) {
+        raise_ud();
+        return;
+    }
+
+    ctx->last_inst_size = (int)instruction_size;
 }
