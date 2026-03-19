@@ -54,6 +54,7 @@ constexpr std::size_t kSlotSize = 16;
 constexpr std::size_t kBufferSize = 64;
 constexpr std::size_t kDataSize = kSlotSize * 4 + kBufferSize * 2;
 constexpr std::uint64_t kInitialMxcsr = 0x1F80;
+constexpr std::uint16_t kInitialX87ControlWord = 0x037F;
 constexpr std::uint64_t kInitialRspOffset = kStackSize - 0x200;
 
 struct TestBridgeBlock {
@@ -2427,6 +2428,7 @@ inline bool initialize_manual_engine(cpueaxh_engine* engine, const std::vector<s
         !write_engine_reg(engine, CPUEAXH_X86_REG_R14, initial.regs[14]) ||
         !write_engine_reg(engine, CPUEAXH_X86_REG_R15, initial.regs[15]) ||
         !write_engine_reg(engine, CPUEAXH_X86_REG_RIP, kGuestCodeBase) ||
+        !write_engine_reg32(engine, CPUEAXH_X86_REG_MXCSR, static_cast<std::uint32_t>(initial.mxcsr)) ||
         !write_engine_reg(engine, CPUEAXH_X86_REG_EFLAGS, initial.rflags)) {
         failure.case_name = name;
         failure.detail = "register initialization failed";
@@ -2557,6 +2559,69 @@ cleanup:
     return ok;
 }
 
+inline bool run_manual_store_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint32_t initial_mxcsr,
+    std::uint64_t store_offset,
+    std::uint32_t expected_size,
+    std::uint64_t expected_value,
+    Failure& failure) {
+    cpueaxh_engine* engine = nullptr;
+    cpueaxh_err err = cpueaxh_open(CPUEAXH_ARCH_X86, CPUEAXH_MODE_64, &engine);
+    if (err != CPUEAXH_ERR_OK) {
+        failure.case_name = name;
+        failure.detail = "cpueaxh_open failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        initial.mxcsr = initial_mxcsr;
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        if (!initialize_manual_engine(engine, code, initial, guest_rsp, failure, name)) {
+            break;
+        }
+
+        err = cpueaxh_emu_start_function(engine, kGuestCodeBase, 0, 1000);
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = "execution failed";
+            break;
+        }
+        if (cpueaxh_code_exception(engine) != CPUEAXH_EXCEPTION_NONE) {
+            failure.case_name = name;
+            failure.detail = "unexpected exception";
+            break;
+        }
+
+        std::uint8_t buffer[8] = {};
+        err = cpueaxh_mem_read(engine, guest_rsp + store_offset, buffer, expected_size);
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = "read stored value failed";
+            break;
+        }
+
+        std::uint64_t actual_value = 0;
+        for (std::uint32_t index = 0; index < expected_size; ++index) {
+            actual_value |= static_cast<std::uint64_t>(buffer[index]) << (index * 8);
+        }
+        if (actual_value != expected_value) {
+            failure.case_name = name;
+            failure.detail = std::string("stored value mismatch expected=") + hex64(expected_value) + " actual=" + hex64(actual_value);
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    cpueaxh_close(engine);
+    return ok;
+}
+
 inline bool run_manual_exception_case(
     const std::string& name,
     const std::vector<std::uint8_t>& code,
@@ -2678,8 +2743,7 @@ inline bool emit_host_mov_reg_imm64(std::vector<std::uint8_t>& code, std::uint8_
 inline bool run_host_stack_roundtrip_case(const std::string& name, std::uint64_t seed, Failure& failure);
 
 inline std::uint64_t manual_special_case_count(const HostFeatures& features) {
-    (void)features;
-    return kSeedCount * 6ull + kExceptionSeedCount * 8ull + kHostStackSeedCount + kContextApiSeedCount;
+    return kSeedCount * (features.avx ? 10ull : 9ull) + kExceptionSeedCount * 8ull + kHostStackSeedCount + kContextApiSeedCount;
 }
 
 inline bool run_manual_special_tests(const HostFeatures& features, std::uint64_t& executed, std::uint64_t total) {
@@ -2693,6 +2757,10 @@ inline bool run_manual_special_tests(const HostFeatures& features, std::uint64_t
     const std::vector<std::uint8_t> invalid_rdssp_lock = { 0xF0, 0xF3, 0x48, 0x0F, 0x1E, 0xC8 };
     const std::vector<std::uint8_t> invalid_rdpid_no_f3 = { 0x48, 0x0F, 0xC7, 0xF8 };
     const std::vector<std::uint8_t> invalid_rdpid_with_66 = { 0x66, 0xF3, 0x48, 0x0F, 0xC7, 0xF8 };
+    const std::vector<std::uint8_t> fnstcw_rsp = { 0xD9, 0x7C, 0x24, 0x40, 0xC3 };
+    const std::vector<std::uint8_t> fstcw_rsp = { 0x9B, 0xD9, 0x7C, 0x24, 0x40, 0xC3 };
+    const std::vector<std::uint8_t> stmxcsr_rsp = { 0x0F, 0xAE, 0x5C, 0x24, 0x40, 0xC3 };
+    const std::vector<std::uint8_t> vstmxcsr_rsp = { 0xC5, 0xF8, 0xAE, 0x5C, 0x24, 0x40, 0xC3 };
 
     auto tick = [&](bool result, const Failure& failure) -> bool {
         if (!result) {
@@ -2728,6 +2796,22 @@ inline bool run_manual_special_tests(const HostFeatures& features, std::uint64_t
         const std::uint64_t seed_rdpid32 = seeded(seed_index, 0xE013);
         const std::uint32_t processor_id32 = static_cast<std::uint32_t>(seeded(seed_rdpid32, 0x91));
         if (!tick(run_manual_special_case("rdpid32:" + std::to_string(seed_rdpid32), rdpid32, seed_rdpid32, processor_id32, true, failure), failure)) return false;
+
+        const std::uint64_t seed_fnstcw = seeded(seed_index, 0xE014);
+        if (!tick(run_manual_store_case("fnstcw:" + std::to_string(seed_fnstcw), fnstcw_rsp, seed_fnstcw, static_cast<std::uint32_t>(kInitialMxcsr), 0x40, 2, kInitialX87ControlWord, failure), failure)) return false;
+
+        const std::uint64_t seed_fstcw = seeded(seed_index, 0xE015);
+        if (!tick(run_manual_store_case("fstcw:" + std::to_string(seed_fstcw), fstcw_rsp, seed_fstcw, static_cast<std::uint32_t>(kInitialMxcsr), 0x40, 2, kInitialX87ControlWord, failure), failure)) return false;
+
+        const std::uint64_t seed_stmxcsr = seeded(seed_index, 0xE016);
+        const std::uint32_t mxcsr_value = static_cast<std::uint32_t>(0x1F80u | (seeded(seed_stmxcsr, 0x92) & 0x1F3Fu));
+        if (!tick(run_manual_store_case("stmxcsr:" + std::to_string(seed_stmxcsr), stmxcsr_rsp, seed_stmxcsr, mxcsr_value, 0x40, 4, mxcsr_value, failure), failure)) return false;
+
+        if (features.avx) {
+            const std::uint64_t seed_vstmxcsr = seeded(seed_index, 0xE017);
+            const std::uint32_t vex_mxcsr_value = static_cast<std::uint32_t>(0x1F80u | (seeded(seed_vstmxcsr, 0x93) & 0x1F3Fu));
+            if (!tick(run_manual_store_case("vstmxcsr:" + std::to_string(seed_vstmxcsr), vstmxcsr_rsp, seed_vstmxcsr, vex_mxcsr_value, 0x40, 4, vex_mxcsr_value, failure), failure)) return false;
+        }
     }
 
     for (std::uint64_t seed_index = 0; seed_index < kExceptionSeedCount; ++seed_index) {

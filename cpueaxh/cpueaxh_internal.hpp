@@ -106,6 +106,7 @@
 #include "instructions/rdssp.hpp"
 #include "instructions/roundsd.hpp"
 #include "instructions/roundss.hpp"
+#include "instructions/x87_control.hpp"
 #include "instructions\rdrand.hpp"
 #include "instructions\xgetbv.hpp"
 #include "instructions\pcmpestrm.hpp"

@@ -557,6 +557,10 @@ int cpu_step(CPU_CONTEXT* ctx) {
     else if (raw_opc == 0xD7) {
         execute_xlat(ctx, buf, (size_t)fetched);
     }
+    // FNSTCW/FSTCW: D9 /7, 9B D9 /7
+    else if (raw_opc == 0xD9 || (raw_opc == 0x9B && (prefix_len + 1) < fetched && buf[prefix_len + 1] == 0xD9)) {
+        execute_x87_control(ctx, buf, (size_t)fetched);
+    }
     // CLC/STC/CLD/STD: F8, F9, FC, FD
     else if (raw_opc == 0xF8 || raw_opc == 0xF9 || raw_opc == 0xFC || raw_opc == 0xFD) {
         execute_flags(ctx, buf, (size_t)fetched);
