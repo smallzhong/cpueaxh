@@ -394,6 +394,20 @@ int cpu_step(CPU_CONTEXT* ctx) {
     else if (opc == 0x0FC7 && is_rdpid_instruction(buf, (size_t)fetched, prefix_len)) {
         execute_rdpid(ctx, buf, (size_t)fetched);
     }
+    else if (opc == 0x0FC7 && (prefix_len + 2) < fetched) {
+        const uint8_t modrm = buf[prefix_len + 2];
+        if ((((modrm >> 3) & 0x07) == 7) && (((modrm >> 6) & 0x03) == 3)) {
+            raise_ud();
+            result_code = CPU_STEP_UD;
+            goto cpu_step_finish;
+        }
+        if (is_rdrand_instruction(buf, (size_t)fetched)) {
+            raise_ud();
+            result_code = CPU_STEP_UD;
+            goto cpu_step_finish;
+        }
+        execute_cmpxchg8b16b(ctx, buf, (size_t)fetched);
+    }
     else if (opc == 0x0FC7) {
         if (is_rdrand_instruction(buf, (size_t)fetched)) {
             raise_ud();
@@ -436,6 +450,15 @@ int cpu_step(CPU_CONTEXT* ctx) {
     }
     else if (is_rdssp_instruction(buf, (size_t)fetched)) {
         execute_rdssp(ctx, buf, (size_t)fetched);
+    }
+    else if (opc == 0x0F1E && (prefix_len + 2) < fetched) {
+        const uint8_t opcode3 = buf[prefix_len + 2];
+        const uint8_t reg = (uint8_t)((opcode3 >> 3) & 0x07);
+        if (opcode3 == 0xFA || opcode3 == 0xFB || reg == 1) {
+            raise_ud();
+            result_code = CPU_STEP_UD;
+            goto cpu_step_finish;
+        }
     }
     // CDQ/CQO/CWD: 99
     else if (raw_opc == 0x99) {

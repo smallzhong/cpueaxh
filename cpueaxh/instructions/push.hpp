@@ -230,6 +230,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         else if (prefix == 0xF0) {
             // LOCK prefix is #UD for PUSH
             raise_ud();
+            return inst;
         }
         else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
             prefix == 0x64 || prefix == 0x65 || prefix == 0xF2 || prefix == 0xF3) {
