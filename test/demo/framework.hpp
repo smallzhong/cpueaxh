@@ -254,6 +254,9 @@ enum class VectorProgram : std::uint8_t {
     Aeskeygenassist,
     Roundsd,
     Roundss,
+    Vfmadd132sd,
+    Vfmadd213sd,
+    Vfmadd231sd,
     Pcmpestrm,
     Pcmpestri,
     Pcmpistrm,
@@ -305,6 +308,7 @@ struct Failure {
 
 struct HostFeatures {
     bool avx = false;
+    bool fma = false;
     bool ssse3 = false;
     bool sse41 = false;
     bool sse42 = false;
@@ -441,6 +445,7 @@ inline HostFeatures query_host_features() {
     const int max_leaf = cpu_info[0];
     if (max_leaf >= 1) {
         __cpuidex(cpu_info, 1, 0);
+        const bool has_fma = (cpu_info[2] & (1 << 12)) != 0;
         const bool has_xsave = (cpu_info[2] & (1 << 26)) != 0;
         const bool has_osxsave = (cpu_info[2] & (1 << 27)) != 0;
         const bool has_avx = (cpu_info[2] & (1 << 28)) != 0;
@@ -448,6 +453,7 @@ inline HostFeatures query_host_features() {
             const unsigned __int64 xcr0 = _xgetbv(0);
             features.avx = (xcr0 & 0x6) == 0x6;
         }
+        features.fma = features.avx && has_fma;
         features.ssse3 = (cpu_info[2] & (1 << 9)) != 0;
         features.sse41 = (cpu_info[2] & (1 << 19)) != 0;
         features.sse42 = (cpu_info[2] & (1 << 20)) != 0;
@@ -1087,6 +1093,45 @@ public:
         emit8(imm);
     }
 
+    void vfmadd132sd(Reg dst, Reg src2, Reg src3) {
+        emit_vex3(true, 0x02, static_cast<std::uint8_t>(src2), false, 0x01, static_cast<std::uint8_t>(dst), 0, static_cast<std::uint8_t>(src3));
+        emit8(0x99);
+        emit_modrm(3, static_cast<std::uint8_t>(dst), static_cast<std::uint8_t>(src3));
+    }
+
+    void vfmadd132sd_mem(Reg dst, Reg src2, Label label) {
+        emit_vex3(true, 0x02, static_cast<std::uint8_t>(src2), false, 0x01, static_cast<std::uint8_t>(dst), 0, 5);
+        emit8(0x99);
+        emit_modrm(0, static_cast<std::uint8_t>(dst), 5);
+        rip_rel32(label);
+    }
+
+    void vfmadd213sd(Reg dst, Reg src2, Reg src3) {
+        emit_vex3(true, 0x02, static_cast<std::uint8_t>(src2), false, 0x01, static_cast<std::uint8_t>(dst), 0, static_cast<std::uint8_t>(src3));
+        emit8(0xA9);
+        emit_modrm(3, static_cast<std::uint8_t>(dst), static_cast<std::uint8_t>(src3));
+    }
+
+    void vfmadd213sd_mem(Reg dst, Reg src2, Label label) {
+        emit_vex3(true, 0x02, static_cast<std::uint8_t>(src2), false, 0x01, static_cast<std::uint8_t>(dst), 0, 5);
+        emit8(0xA9);
+        emit_modrm(0, static_cast<std::uint8_t>(dst), 5);
+        rip_rel32(label);
+    }
+
+    void vfmadd231sd(Reg dst, Reg src2, Reg src3) {
+        emit_vex3(true, 0x02, static_cast<std::uint8_t>(src2), false, 0x01, static_cast<std::uint8_t>(dst), 0, static_cast<std::uint8_t>(src3));
+        emit8(0xB9);
+        emit_modrm(3, static_cast<std::uint8_t>(dst), static_cast<std::uint8_t>(src3));
+    }
+
+    void vfmadd231sd_mem(Reg dst, Reg src2, Label label) {
+        emit_vex3(true, 0x02, static_cast<std::uint8_t>(src2), false, 0x01, static_cast<std::uint8_t>(dst), 0, 5);
+        emit8(0xB9);
+        emit_modrm(0, static_cast<std::uint8_t>(dst), 5);
+        rip_rel32(label);
+    }
+
     void paddq(Reg dst, Reg src) {
         emit_rex(false, static_cast<std::uint8_t>(dst), 0, static_cast<std::uint8_t>(src));
         emit8(0x66);
@@ -1524,6 +1569,14 @@ inline std::vector<ProgramSpec> make_specs(const HostFeatures& features) {
             specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Vinsertf128), static_cast<std::uint32_t>(index + kVinsertf128Immediates.size()), 0, "vinsertf128_mem_imm" + std::to_string(kVinsertf128Immediates[index]) });
         }
     }
+    if (features.fma) {
+        specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Vfmadd132sd), 0, 0, "vfmadd132sd_reg" });
+        specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Vfmadd132sd), 1, 0, "vfmadd132sd_mem" });
+        specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Vfmadd213sd), 0, 0, "vfmadd213sd_reg" });
+        specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Vfmadd213sd), 1, 0, "vfmadd213sd_mem" });
+        specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Vfmadd231sd), 0, 0, "vfmadd231sd_reg" });
+        specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Vfmadd231sd), 1, 0, "vfmadd231sd_mem" });
+    }
     specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::MovdMmReg), 0, 0, "movd_mm_reg" });
     specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::MovqMmReg), 0, 0, "movq_mm_reg" });
     specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::MovdMmMem), 0, 0, "movd_mm_mem" });
@@ -1868,6 +1921,36 @@ inline BuiltCase build_case(const ProgramSpec& spec, std::uint64_t seed) {
             code.vmovups_ymm_store(buffer0, Reg::RDX);
             break;
         }
+        case VectorProgram::Vfmadd132sd:
+            if (spec.variant == 0) {
+                code.movdqu_load(Reg::RDX, slot2);
+                code.vfmadd132sd(Reg::RAX, Reg::RCX, Reg::RDX);
+            }
+            else {
+                code.vfmadd132sd_mem(Reg::RAX, Reg::RCX, slot2);
+            }
+            code.movdqu_store(buffer0, Reg::RAX);
+            break;
+        case VectorProgram::Vfmadd213sd:
+            if (spec.variant == 0) {
+                code.movdqu_load(Reg::RDX, slot2);
+                code.vfmadd213sd(Reg::RAX, Reg::RCX, Reg::RDX);
+            }
+            else {
+                code.vfmadd213sd_mem(Reg::RAX, Reg::RCX, slot2);
+            }
+            code.movdqu_store(buffer0, Reg::RAX);
+            break;
+        case VectorProgram::Vfmadd231sd:
+            if (spec.variant == 0) {
+                code.movdqu_load(Reg::RDX, slot2);
+                code.vfmadd231sd(Reg::RAX, Reg::RCX, Reg::RDX);
+            }
+            else {
+                code.vfmadd231sd_mem(Reg::RAX, Reg::RCX, slot2);
+            }
+            code.movdqu_store(buffer0, Reg::RAX);
+            break;
         case VectorProgram::MovdMmReg:
             code.movd_mm_reg(Reg::RAX, Reg::R8);
             code.movd_mem_mm(buffer0, Reg::RAX);

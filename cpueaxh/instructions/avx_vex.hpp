@@ -596,6 +596,14 @@ static DecodedInstruction decode_avx_vex_modrm(CPU_CONTEXT* ctx, uint8_t* code, 
         }
         decode_modrm_sse2_pack(ctx, &inst, code, code_size, &offset, false);
         break;
+    case 0x99:
+    case 0xA9:
+    case 0xB9:
+        if (map_select != 0x02 || mandatory_prefix != 1) {
+            raise_ud_ctx(ctx);
+        }
+        decode_modrm_sse2_arith_pd(ctx, &inst, code, code_size, &offset, false);
+        break;
     case 0x8C:
     case 0x8E:
         if (map_select != 0x02 || mandatory_prefix != 1) {
@@ -3600,6 +3608,42 @@ static XMMRegister apply_avx_arith_sd128(CPU_CONTEXT* ctx, uint8_t opcode, XMMRe
     return result;
 }
 
+static XMMRegister apply_avx_fmadd_sd128(CPU_CONTEXT* ctx, uint8_t opcode, XMMRegister src1, XMMRegister src2, uint64_t src3_bits) {
+    XMMRegister src3 = {};
+    src3.low = src3_bits;
+    unsigned int old_mode = _MM_GET_ROUNDING_MODE();
+    _MM_SET_ROUNDING_MODE(avx_host_rounding_mode(ctx->mxcsr));
+    // Mirror the Intel pseudocode operand ordering for 132/213/231 while keeping the scalar op fused.
+    switch (opcode) {
+    case 0x99: {
+        XMMRegister result = sse2_math_pd_m128d_to_xmm(_mm_fmadd_sd(sse2_math_pd_xmm_to_m128d(src1),
+                                                                     sse2_math_pd_xmm_to_m128d(src3),
+                                                                     sse2_math_pd_xmm_to_m128d(src2)));
+        _MM_SET_ROUNDING_MODE(old_mode);
+        return result;
+    }
+    case 0xA9: {
+        XMMRegister result = sse2_math_pd_m128d_to_xmm(_mm_fmadd_sd(sse2_math_pd_xmm_to_m128d(src1),
+                                                                     sse2_math_pd_xmm_to_m128d(src2),
+                                                                     sse2_math_pd_xmm_to_m128d(src3)));
+        _MM_SET_ROUNDING_MODE(old_mode);
+        return result;
+    }
+    case 0xB9: {
+        XMMRegister result = sse2_math_pd_m128d_to_xmm(_mm_fmadd_sd(sse2_math_pd_xmm_to_m128d(src2),
+                                                                     sse2_math_pd_xmm_to_m128d(src3),
+                                                                     sse2_math_pd_xmm_to_m128d(src1)));
+        _MM_SET_ROUNDING_MODE(old_mode);
+        result.high = src1.high;
+        return result;
+    }
+    default:
+        _MM_SET_ROUNDING_MODE(old_mode);
+        raise_ud_ctx(ctx);
+        return src1;
+    }
+}
+
 static XMMRegister apply_avx_movss_load128(XMMRegister src1, uint32_t rhs_bits) {
     XMMRegister result = src1;
     set_xmm_lane_bits(&result, 0, rhs_bits);
@@ -4401,6 +4445,19 @@ void execute_avx_vex(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
                     execute_avx_gather_qps(ctx, &prefix, &inst, is_256);
                 }
             }
+            return;
+        }
+        if (opcode == 0x99 || opcode == 0xA9 || opcode == 0xB9) {
+            if (mandatory_prefix != 1 || !ctx->rex_w) {
+                raise_ud_ctx(ctx);
+            }
+            DecodedInstruction inst = decode_avx_vex_modrm(ctx, code, code_size, &prefix);
+            int dest = avx_vex_dest_index(ctx, inst.modrm);
+            XMMRegister src1 = get_xmm128(ctx, dest);
+            XMMRegister src2 = get_xmm128(ctx, avx_vex_source1_index(&prefix));
+            uint64_t src3 = read_sse2_arith_pd_scalar_source_bits(ctx, &inst);
+            set_xmm128(ctx, dest, apply_avx_fmadd_sd128(ctx, opcode, src1, src2, src3));
+            clear_ymm_upper128(ctx, dest);
             return;
         }
         if (opcode == 0x8C || opcode == 0x8E) {
