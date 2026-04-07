@@ -26,7 +26,7 @@ int decode_sse2_mov_int_gpr_reg_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse2_mov_int(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -37,7 +37,7 @@ void decode_modrm_sse2_mov_int(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -58,7 +58,7 @@ void decode_modrm_sse2_mov_int(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -75,7 +75,7 @@ void decode_modrm_sse2_mov_int(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (mod != 3) {
@@ -136,28 +136,28 @@ DecodedInstruction decode_sse2_mov_int_instruction(CPU_CONTEXT* ctx, uint8_t* co
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x6F && inst.opcode != 0x7F && inst.opcode != 0xD7) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if ((inst.opcode == 0x6F || inst.opcode == 0x7F) && *mandatory_prefix != 0x66 && *mandatory_prefix != 0xF3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (inst.opcode == 0xD7 && *mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -170,7 +170,7 @@ DecodedInstruction decode_sse2_mov_int_instruction(CPU_CONTEXT* ctx, uint8_t* co
     decode_modrm_sse2_mov_int(ctx, &inst, code, code_size, &offset, has_lock_prefix);
 
     if (inst.opcode == 0xD7 && ((inst.modrm >> 6) & 0x03) != 0x03) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;
@@ -179,9 +179,9 @@ DecodedInstruction decode_sse2_mov_int_instruction(CPU_CONTEXT* ctx, uint8_t* co
     return inst;
 }
 
-void validate_sse2_movdqa_alignment(const DecodedInstruction* inst) {
+void validate_sse2_movdqa_alignment(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
     if (((inst->modrm >> 6) & 0x03) != 3 && (inst->mem_address & 0x0F) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
@@ -192,7 +192,7 @@ XMMRegister read_sse2_mov_int_rm128(CPU_CONTEXT* ctx, const DecodedInstruction* 
     }
 
     if (aligned) {
-        validate_sse2_movdqa_alignment(inst);
+        validate_sse2_movdqa_alignment(ctx, inst);
     }
     return read_xmm_memory(ctx, inst->mem_address);
 }
@@ -205,7 +205,7 @@ void write_sse2_mov_int_rm128(CPU_CONTEXT* ctx, const DecodedInstruction* inst, 
     }
 
     if (aligned) {
-        validate_sse2_movdqa_alignment(inst);
+        validate_sse2_movdqa_alignment(ctx, inst);
     }
     write_xmm_memory(ctx, inst->mem_address, value);
 }
@@ -248,5 +248,5 @@ void execute_sse2_mov_int(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         return;
     }
 
-    raise_ud();
+    raise_ud_ctx(ctx);
 }

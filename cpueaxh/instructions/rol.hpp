@@ -1,4 +1,4 @@
-﻿// instrusments/rol.hpp - ROL instruction implementation
+// instrusments/rol.hpp - ROL instruction implementation
 
 int decode_rol_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
     int rm = modrm & 0x07;
@@ -18,7 +18,7 @@ uint64_t read_rol_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -27,7 +27,7 @@ uint64_t read_rol_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -41,7 +41,7 @@ void write_rol_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, in
         case 16: set_reg16(ctx, rm, (uint16_t)value); break;
         case 32: set_reg32(ctx, rm, (uint32_t)value); break;
         case 64: set_reg64(ctx, rm, value); break;
-        default: raise_ud();
+        default: raise_ud_ctx(ctx);
         }
         return;
     }
@@ -51,27 +51,27 @@ void write_rol_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, in
     case 16: write_memory_word(ctx, mem_addr, (uint16_t)value); break;
     case 32: write_memory_dword(ctx, mem_addr, (uint32_t)value); break;
     case 64: write_memory_qword(ctx, mem_addr, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
-uint64_t get_rol_operand_mask(int operand_size) {
+uint64_t get_rol_operand_mask(CPU_CONTEXT* ctx, int operand_size) {
     switch (operand_size) {
     case 8:  return 0xFFULL;
     case 16: return 0xFFFFULL;
     case 32: return 0xFFFFFFFFULL;
     case 64: return 0xFFFFFFFFFFFFFFFFULL;
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
-uint64_t get_rol_sign_mask(int operand_size) {
+uint64_t get_rol_sign_mask(CPU_CONTEXT* ctx, int operand_size) {
     switch (operand_size) {
     case 8:  return 0x80ULL;
     case 16: return 0x8000ULL;
     case 32: return 0x80000000ULL;
     case 64: return 0x8000000000000000ULL;
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -91,7 +91,7 @@ uint8_t decode_rol_count(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
     case 0xC1:
         return (uint8_t)inst->immediate;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         return 0;
     }
 }
@@ -103,7 +103,7 @@ void update_flags_rol(CPU_CONTEXT* ctx, uint64_t result, int operand_size, unsig
 
     set_flag(ctx, RFLAGS_CF, carry_out);
     if (count == 1) {
-        bool msb = (result & get_rol_sign_mask(operand_size)) != 0;
+        bool msb = (result & get_rol_sign_mask(ctx, operand_size)) != 0;
         set_flag(ctx, RFLAGS_OF, msb ^ carry_out);
     }
 }
@@ -112,7 +112,7 @@ void rol_rm(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64_t
     (void)sib;
     (void)disp;
 
-    uint64_t mask = get_rol_operand_mask(operand_size);
+    uint64_t mask = get_rol_operand_mask(ctx, operand_size);
     unsigned int count = raw_count & get_rol_count_mask(operand_size);
     if (operand_size != 0) {
         count %= (unsigned int)operand_size;
@@ -125,7 +125,7 @@ void rol_rm(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64_t
 
     bool carry_out = false;
     for (unsigned int i = 0; i < count; i++) {
-        carry_out = (result & get_rol_sign_mask(operand_size)) != 0;
+        carry_out = (result & get_rol_sign_mask(ctx, operand_size)) != 0;
         result = ((result << 1) | (carry_out ? 1ULL : 0ULL)) & mask;
     }
 
@@ -135,7 +135,7 @@ void rol_rm(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64_t
 
 void decode_modrm_rol(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -146,7 +146,7 @@ void decode_modrm_rol(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -167,7 +167,7 @@ void decode_modrm_rol(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -188,7 +188,7 @@ void decode_modrm_rol(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
     }
 
     if (has_lock_prefix && mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -238,7 +238,7 @@ DecodedInstruction decode_rol_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -264,11 +264,11 @@ DecodedInstruction decode_rol_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         inst.operand_size = 8;
         decode_modrm_rol(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 0) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (inst.opcode == 0xC0) {
             if (offset >= code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = code[offset++];
             inst.imm_size = 1;
@@ -280,11 +280,11 @@ DecodedInstruction decode_rol_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     case 0xC1:
         decode_modrm_rol(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 0) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (inst.opcode == 0xC1) {
             if (offset >= code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = code[offset++];
             inst.imm_size = 1;
@@ -292,7 +292,7 @@ DecodedInstruction decode_rol_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

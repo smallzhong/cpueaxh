@@ -115,7 +115,7 @@ void push_imm32_64(CPU_CONTEXT* ctx, int32_t imm) {
 void push_sreg16(CPU_CONTEXT* ctx, int seg_index) {
     SegmentRegister* sreg = get_segment_register(ctx, seg_index);
     if (!sreg) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     push_value16(ctx, sreg->selector);
 }
@@ -123,7 +123,7 @@ void push_sreg16(CPU_CONTEXT* ctx, int seg_index) {
 void push_sreg32(CPU_CONTEXT* ctx, int seg_index) {
     SegmentRegister* sreg = get_segment_register(ctx, seg_index);
     if (!sreg) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     // Zero-extended or 16-bit write; we follow the common behavior of zero-extending
     push_value32(ctx, (uint32_t)sreg->selector);
@@ -132,7 +132,7 @@ void push_sreg32(CPU_CONTEXT* ctx, int seg_index) {
 void push_sreg64(CPU_CONTEXT* ctx, int seg_index) {
     SegmentRegister* sreg = get_segment_register(ctx, seg_index);
     if (!sreg) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     // Zero-extended to 64 bits
     push_value64(ctx, (uint64_t)sreg->selector);
@@ -142,7 +142,7 @@ void push_sreg64(CPU_CONTEXT* ctx, int seg_index) {
 
 void decode_modrm_push(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst->has_modrm = true;
     inst->modrm = code[(*offset)++];
@@ -153,7 +153,7 @@ void decode_modrm_push(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
     // SIB byte present when rm==4 and mod!=3 (not in 16-bit addressing)
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -175,7 +175,7 @@ void decode_modrm_push(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->displacement = 0;
         for (int i = 0; i < inst->disp_size; i++) {
@@ -229,7 +229,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         }
         else if (prefix == 0xF0) {
             // LOCK prefix is #UD for PUSH
-            raise_ud();
+            raise_ud_ctx(ctx);
             return inst;
         }
         else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
@@ -242,7 +242,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -282,7 +282,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     case 0xFF:
         decode_modrm_push(ctx, &inst, code, code_size, &offset);
         if (((inst.modrm >> 3) & 0x07) != 6) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         // In 64-bit mode, 32-bit operand size is not encodable
         if (ctx->cs.descriptor.long_mode && inst.operand_size == 32) {
@@ -303,7 +303,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     case 0x6A:
         inst.imm_size = 1;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
         break;
@@ -317,7 +317,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             inst.imm_size = 4;
         }
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -328,35 +328,35 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     // 0E - PUSH CS (invalid in 64-bit mode)
     case 0x0E:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     // 16 - PUSH SS (invalid in 64-bit mode)
     case 0x16:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     // 1E - PUSH DS (invalid in 64-bit mode)
     case 0x1E:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     // 06 - PUSH ES (invalid in 64-bit mode)
     case 0x06:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     // 0F xx - two-byte opcodes (PUSH FS / PUSH GS)
     case 0x0F:
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.opcode = code[offset++];
         // Mark as two-byte opcode by setting bit 8 in a local variable
@@ -371,7 +371,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             inst.opcode = 0xA8;
         }
         else {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         // Store a marker so executor knows this was a 0x0F-prefixed instruction
         inst.has_modrm = false;
@@ -379,7 +379,7 @@ DecodedInstruction decode_push_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

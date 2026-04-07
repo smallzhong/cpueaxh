@@ -89,7 +89,7 @@ uint64_t leave_pop64(CPU_CONTEXT* ctx, int stack_addr_size) {
         return value;
     }
 
-    raise_gp(0);
+    raise_gp_ctx(ctx, 0);
     return 0;
 }
 
@@ -139,16 +139,16 @@ DecodedInstruction decode_leave_instruction(CPU_CONTEXT* ctx, uint8_t* code, siz
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xC9) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = decode_leave_operand_size(ctx);

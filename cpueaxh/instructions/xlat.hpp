@@ -28,7 +28,7 @@ uint64_t get_xlat_base_offset(CPU_CONTEXT* ctx, int address_size) {
     case 64:
         return get_reg64(ctx, REG_RBX);
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         return 0;
     }
 }
@@ -98,16 +98,16 @@ DecodedInstruction decode_xlat_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xD7) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.address_size = decode_xlat_address_size(ctx);

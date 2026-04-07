@@ -18,7 +18,7 @@ int decode_movaps_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_movaps(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_movaps(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* co
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_movaps(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* co
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,7 +71,7 @@ void decode_modrm_movaps(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* co
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -122,20 +122,20 @@ DecodedInstruction decode_movaps_instruction(CPU_CONTEXT* ctx, uint8_t* code, si
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x28 && inst.opcode != 0x29) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -153,9 +153,9 @@ DecodedInstruction decode_movaps_instruction(CPU_CONTEXT* ctx, uint8_t* code, si
     return inst;
 }
 
-void validate_movaps_memory_alignment(const DecodedInstruction* inst) {
+void validate_movaps_memory_alignment(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
     if (((inst->modrm >> 6) & 0x03) != 3 && (inst->mem_address & 0x0F) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
@@ -165,7 +165,7 @@ XMMRegister read_movaps_rm128(CPU_CONTEXT* ctx, const DecodedInstruction* inst) 
         return get_xmm128(ctx, decode_movaps_xmm_rm_index(ctx, inst->modrm));
     }
 
-    validate_movaps_memory_alignment(inst);
+    validate_movaps_memory_alignment(ctx, inst);
     return read_xmm_memory(ctx, inst->mem_address);
 }
 
@@ -176,7 +176,7 @@ void write_movaps_rm128(CPU_CONTEXT* ctx, const DecodedInstruction* inst, XMMReg
         return;
     }
 
-    validate_movaps_memory_alignment(inst);
+    validate_movaps_memory_alignment(ctx, inst);
     write_xmm_memory(ctx, inst->mem_address, value);
 }
 
@@ -195,5 +195,5 @@ void execute_movaps(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         return;
     }
 
-    raise_ud();
+    raise_ud_ctx(ctx);
 }

@@ -22,7 +22,7 @@ uint64_t read_xadd_reg_operand(CPU_CONTEXT* ctx, int reg_index, int operand_size
     case 16: return get_reg16(ctx, reg_index);
     case 32: return get_reg32(ctx, reg_index);
     case 64: return get_reg64(ctx, reg_index);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -32,7 +32,7 @@ void write_xadd_reg_operand(CPU_CONTEXT* ctx, int reg_index, int operand_size, u
     case 16: set_reg16(ctx, reg_index, (uint16_t)value); break;
     case 32: set_reg32(ctx, reg_index, (uint32_t)value); break;
     case 64: set_reg64(ctx, reg_index, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
@@ -48,7 +48,7 @@ uint64_t read_xadd_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -65,7 +65,7 @@ void write_xadd_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, i
     case 16: write_memory_word(ctx, mem_addr, (uint16_t)value); break;
     case 32: write_memory_dword(ctx, mem_addr, (uint32_t)value); break;
     case 64: write_memory_qword(ctx, mem_addr, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
@@ -98,7 +98,7 @@ uint64_t xadd_compute_result(CPU_CONTEXT* ctx, int operand_size, uint64_t dst_va
         return result;
     }
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         return 0;
     }
 }
@@ -127,7 +127,7 @@ void xadd_rm_reg(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int operand
 
 void decode_modrm_xadd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -137,7 +137,7 @@ void decode_modrm_xadd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -158,7 +158,7 @@ void decode_modrm_xadd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->displacement = 0;
         for (int index = 0; index < inst->disp_size; index++) {
@@ -177,7 +177,7 @@ void decode_modrm_xadd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
     }
 
     if (has_lock_prefix && mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -226,11 +226,11 @@ DecodedInstruction decode_xadd_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
@@ -259,7 +259,7 @@ DecodedInstruction decode_xadd_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         decode_modrm_xadd(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;

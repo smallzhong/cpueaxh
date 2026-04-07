@@ -26,34 +26,34 @@ void ret_far_adjust_stack(CPU_CONTEXT* ctx, uint16_t adjustment) {
 
 void validate_ret_far_selector(CPU_CONTEXT* ctx, uint16_t selector, SegmentDescriptor* desc_out) {
     if (is_null_selector(selector)) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     SegmentDescriptor desc = load_descriptor_from_table(ctx, selector);
     if (!is_code_segment(desc.type)) {
-        raise_gp(selector & 0xFFFC);
+        raise_gp_ctx(ctx, selector & 0xFFFC);
     }
 
     if (ctx->cs.descriptor.long_mode && desc.long_mode && desc.db) {
-        raise_gp(selector & 0xFFFC);
+        raise_gp_ctx(ctx, selector & 0xFFFC);
     }
 
     uint8_t rpl = selector & 0x03;
     if (rpl != ctx->cpl) {
-        raise_gp(selector & 0xFFFC);
+        raise_gp_ctx(ctx, selector & 0xFFFC);
     }
 
     if (is_conforming_code_segment(desc.type)) {
         if (desc.dpl > ctx->cpl) {
-            raise_gp(selector & 0xFFFC);
+            raise_gp_ctx(ctx, selector & 0xFFFC);
         }
     }
     else if (desc.dpl != ctx->cpl) {
-        raise_gp(selector & 0xFFFC);
+        raise_gp_ctx(ctx, selector & 0xFFFC);
     }
 
     if (!desc.present) {
-        raise_np(selector & 0xFFFC);
+        raise_np_ctx(ctx, selector & 0xFFFC);
     }
 
     *desc_out = desc;
@@ -105,16 +105,16 @@ DecodedInstruction decode_ret_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xCA && inst.opcode != 0xCB) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = decode_ret_far_operand_size(ctx);
@@ -122,7 +122,7 @@ DecodedInstruction decode_ret_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
 
     if (inst.opcode == 0xCA) {
         if (offset + 2 > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = (uint16_t)code[offset] | ((uint16_t)code[offset + 1] << 8);
         inst.imm_size = 2;
@@ -217,15 +217,15 @@ DecodedInstruction decode_iret_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xCF) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = decode_ret_far_operand_size(ctx);
@@ -267,7 +267,7 @@ void execute_iret(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
 
     const uint8_t NewRpl = new_selector & 0x03;
     if (NewRpl != ctx->cpl) {
-        raise_gp(new_selector & 0xFFFC);
+        raise_gp_ctx(ctx, new_selector & 0xFFFC);
         return;
     }
 

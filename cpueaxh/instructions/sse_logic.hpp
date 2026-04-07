@@ -18,7 +18,7 @@ int decode_sse_logic_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse_logic(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse_logic(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t*
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse_logic(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t*
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,7 +71,7 @@ void decode_modrm_sse_logic(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t*
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -128,32 +128,32 @@ DecodedInstruction decode_sse_logic_instruction(CPU_CONTEXT* ctx, uint8_t* code,
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x54 && inst.opcode != 0x55 && inst.opcode != 0x56 && inst.opcode != 0x57 && inst.opcode != 0xEF) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix || *mandatory_prefix == 0xF2 || *mandatory_prefix == 0xF3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if ((inst.opcode == 0x54 || inst.opcode == 0x55 || inst.opcode == 0x56) && *mandatory_prefix != 0) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (inst.opcode == 0x57 && *mandatory_prefix != 0 && *mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (inst.opcode == 0xEF && *mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -210,7 +210,7 @@ void execute_sse_logic(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         result.high = lhs.high ^ rhs.high;
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         break;
     }
 

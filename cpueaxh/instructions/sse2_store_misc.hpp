@@ -18,7 +18,7 @@ int decode_sse2_store_misc_gpr_reg_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse2_store_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse2_store_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, ui
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse2_store_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, ui
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -67,11 +67,11 @@ void decode_modrm_sse2_store_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, ui
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst->mem_address = get_effective_address(ctx, inst->modrm, &inst->sib, &inst->displacement, inst->address_size);
@@ -130,26 +130,26 @@ DecodedInstruction decode_sse2_store_misc_instruction(CPU_CONTEXT* ctx, uint8_t*
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x2B && inst.opcode != 0xC3 && inst.opcode != 0xE7) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if ((inst.opcode == 0x2B && *mandatory_prefix != 0x66) ||
         (inst.opcode == 0xE7 && *mandatory_prefix != 0x66) ||
         (inst.opcode == 0xC3 && *mandatory_prefix != 0)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -168,9 +168,9 @@ DecodedInstruction decode_sse2_store_misc_instruction(CPU_CONTEXT* ctx, uint8_t*
     return inst;
 }
 
-void validate_sse2_non_temporal_xmm_store_alignment(const DecodedInstruction* inst) {
+void validate_sse2_non_temporal_xmm_store_alignment(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
     if ((inst->mem_address & 0x0FULL) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
@@ -180,7 +180,7 @@ void execute_sse2_store_misc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) 
 
     if (inst.opcode == 0x2B || inst.opcode == 0xE7) {
         int src = decode_sse2_store_misc_xmm_reg_index(ctx, inst.modrm);
-        validate_sse2_non_temporal_xmm_store_alignment(&inst);
+        validate_sse2_non_temporal_xmm_store_alignment(ctx, &inst);
         write_xmm_memory(ctx, inst.mem_address, get_xmm128(ctx, src));
         return;
     }
@@ -196,5 +196,5 @@ void execute_sse2_store_misc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) 
         return;
     }
 
-    raise_ud();
+    raise_ud_ctx(ctx);
 }

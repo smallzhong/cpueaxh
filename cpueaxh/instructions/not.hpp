@@ -20,7 +20,7 @@ uint64_t read_not_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -29,7 +29,7 @@ uint64_t read_not_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -43,7 +43,7 @@ void write_not_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, in
         case 16: set_reg16(ctx, rm, (uint16_t)value); break;
         case 32: set_reg32(ctx, rm, (uint32_t)value); break;
         case 64: set_reg64(ctx, rm, value); break;
-        default: raise_ud();
+        default: raise_ud_ctx(ctx);
         }
         return;
     }
@@ -53,7 +53,7 @@ void write_not_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, in
     case 16: write_memory_word(ctx, mem_addr, (uint16_t)value); break;
     case 32: write_memory_dword(ctx, mem_addr, (uint32_t)value); break;
     case 64: write_memory_qword(ctx, mem_addr, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
@@ -84,24 +84,24 @@ bool not_rm_atomic(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int opera
             (void)_InterlockedXor64((volatile __int64*)ptr, (__int64)0xFFFFFFFFFFFFFFFFull);
             return true;
         default:
-            raise_ud();
+            raise_ud_ctx(ctx);
             return true;
         }
     }
 
-    uint64_t current_value = read_memory_operand(ctx, mem_addr, operand_size) & cpu_memory_operand_mask(operand_size);
+    uint64_t current_value = read_memory_operand(ctx, mem_addr, operand_size) & cpu_memory_operand_mask(ctx, operand_size);
     if (cpu_has_exception(ctx)) {
         return true;
     }
 
     for (;;) {
-        uint64_t new_value = (~current_value) & cpu_memory_operand_mask(operand_size);
+        uint64_t new_value = (~current_value) & cpu_memory_operand_mask(ctx, operand_size);
         uint64_t observed_value = 0;
         if (!cpu_atomic_compare_exchange_memory(ctx, mem_addr, operand_size, current_value, new_value, &observed_value)) {
             if (cpu_has_exception(ctx)) {
                 return true;
             }
-            current_value = observed_value & cpu_memory_operand_mask(operand_size);
+            current_value = observed_value & cpu_memory_operand_mask(ctx, operand_size);
             continue;
         }
         return true;
@@ -156,7 +156,7 @@ void not_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64
 
 void decode_modrm_not(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -167,7 +167,7 @@ void decode_modrm_not(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -188,7 +188,7 @@ void decode_modrm_not(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -209,7 +209,7 @@ void decode_modrm_not(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
     }
 
     if (has_lock_prefix && mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -261,7 +261,7 @@ DecodedInstruction decode_not_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -287,7 +287,7 @@ DecodedInstruction decode_not_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         inst.operand_size = 8;
         decode_modrm_not(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 2) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
@@ -295,12 +295,12 @@ DecodedInstruction decode_not_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     case 0xF7:
         decode_modrm_not(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 2) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

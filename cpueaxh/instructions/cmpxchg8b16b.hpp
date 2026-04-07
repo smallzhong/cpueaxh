@@ -6,26 +6,26 @@ int decode_cmpxchg8b16b_group(uint8_t modrm) {
 
 void decode_modrm_cmpxchg8b16b(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
     inst->modrm = code[(*offset)++];
 
     if (decode_cmpxchg8b16b_group(inst->modrm) != 1) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     uint8_t mod = (inst->modrm >> 6) & 0x03;
     uint8_t rm = inst->modrm & 0x07;
 
     if (mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -46,7 +46,7 @@ void decode_modrm_cmpxchg8b16b(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -110,16 +110,16 @@ DecodedInstruction decode_cmpxchg8b16b_instruction(CPU_CONTEXT* ctx, uint8_t* co
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xC7) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = ctx->rex_w ? 128 : 64;
@@ -133,7 +133,7 @@ DecodedInstruction decode_cmpxchg8b16b_instruction(CPU_CONTEXT* ctx, uint8_t* co
     decode_modrm_cmpxchg8b16b(ctx, &inst, code, code_size, &offset);
 
     if (inst.operand_size == 128 && (inst.mem_address & 0x0FULL) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     (void)has_lock_prefix;
@@ -188,6 +188,6 @@ void execute_cmpxchg8b16b(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         execute_cmpxchg8b_memory(ctx, inst.mem_address);
     }
     else {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }

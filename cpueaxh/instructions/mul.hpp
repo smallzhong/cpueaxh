@@ -20,7 +20,7 @@ uint64_t read_mul_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -29,7 +29,7 @@ uint64_t read_mul_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -100,7 +100,7 @@ void mul_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64
 
 void decode_modrm_mul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -111,7 +111,7 @@ void decode_modrm_mul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -132,7 +132,7 @@ void decode_modrm_mul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -153,7 +153,7 @@ void decode_modrm_mul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -205,7 +205,7 @@ DecodedInstruction decode_mul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -229,19 +229,19 @@ DecodedInstruction decode_mul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         inst.operand_size = 8;
         decode_modrm_mul(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 4) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     case 0xF7:
         decode_modrm_mul(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 4) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

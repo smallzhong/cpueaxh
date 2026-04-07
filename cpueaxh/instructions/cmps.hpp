@@ -27,7 +27,7 @@ uint64_t get_cmps_index(CPU_CONTEXT* ctx, int reg, int address_size) {
     case 16: return get_reg16(ctx, reg);
     case 32: return get_reg32(ctx, reg);
     case 64: return get_reg64(ctx, reg);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -43,7 +43,7 @@ void set_cmps_index(CPU_CONTEXT* ctx, int reg, int address_size, uint64_t value)
         set_reg64(ctx, reg, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -58,7 +58,7 @@ uint64_t read_cmps_value(CPU_CONTEXT* ctx, uint64_t address, int operand_size) {
     case 16: return read_memory_word(ctx, address);
     case 32: return read_memory_dword(ctx, address);
     case 64: return read_memory_qword(ctx, address);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -93,7 +93,7 @@ void update_cmps_flags(CPU_CONTEXT* ctx, int operand_size, uint64_t source_value
         break;
     }
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -159,16 +159,16 @@ DecodedInstruction decode_cmps_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xA6 && inst.opcode != 0xA7) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = decode_cmps_operand_size(ctx, inst.opcode);

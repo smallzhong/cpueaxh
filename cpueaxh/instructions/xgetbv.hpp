@@ -45,20 +45,20 @@ DecodedInstruction decode_xgetbv_instruction(CPU_CONTEXT* ctx, uint8_t* code, si
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset + 3 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x01 || code[offset++] != 0xD0) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;
@@ -73,21 +73,21 @@ void execute_xgetbv(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     int cpuid_leaf1[4] = {};
     cpu_query_cpuid(cpuid_leaf1, 1, 0);
     if ((cpuid_leaf1[2] & (1 << 26)) == 0) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return;
     }
 
     uint32_t xcr_index = get_reg32(ctx, REG_RCX);
     if (xcr_index != 0) {
         if (xcr_index != 1) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             return;
         }
 
         int cpuid_leaf_d1[4] = {};
         cpu_query_cpuid(cpuid_leaf_d1, 0x0D, 1);
         if ((cpuid_leaf_d1[0] & (1 << 2)) == 0) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             return;
         }
     }

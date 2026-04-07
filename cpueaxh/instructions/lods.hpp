@@ -39,7 +39,7 @@ uint64_t get_lods_index(CPU_CONTEXT* ctx, int address_size) {
     case 16: return get_reg16(ctx, REG_RSI);
     case 32: return get_reg32(ctx, REG_RSI);
     case 64: return get_reg64(ctx, REG_RSI);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -55,7 +55,7 @@ void set_lods_index(CPU_CONTEXT* ctx, int address_size, uint64_t value) {
         set_reg64(ctx, REG_RSI, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -70,7 +70,7 @@ uint64_t read_lods_value(CPU_CONTEXT* ctx, uint64_t address, int operand_size) {
     case 16: return read_memory_word(ctx, address);
     case 32: return read_memory_dword(ctx, address);
     case 64: return read_memory_qword(ctx, address);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -89,7 +89,7 @@ void write_lods_accumulator(CPU_CONTEXT* ctx, int operand_size, uint64_t value) 
         set_reg64(ctx, REG_RAX, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -143,16 +143,16 @@ DecodedInstruction decode_lods_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xAC && inst.opcode != 0xAD) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = decode_lods_operand_size(ctx, inst.opcode);

@@ -18,7 +18,7 @@ int decode_sse2_shift_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse2_shift(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse2_shift(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse2_shift(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,7 +71,7 @@ void decode_modrm_sse2_shift(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -128,11 +128,11 @@ DecodedInstruction decode_sse2_shift_instruction(CPU_CONTEXT* ctx, uint8_t* code
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
@@ -140,15 +140,15 @@ DecodedInstruction decode_sse2_shift_instruction(CPU_CONTEXT* ctx, uint8_t* code
         inst.opcode != 0xD1 && inst.opcode != 0xD2 && inst.opcode != 0xD3 &&
         inst.opcode != 0xE1 && inst.opcode != 0xE2 &&
         inst.opcode != 0xF1 && inst.opcode != 0xF2 && inst.opcode != 0xF3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (*mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -163,26 +163,26 @@ DecodedInstruction decode_sse2_shift_instruction(CPU_CONTEXT* ctx, uint8_t* code
     uint8_t group = (inst.modrm >> 3) & 0x07;
     if (inst.opcode == 0x71 || inst.opcode == 0x72) {
         if (((inst.modrm >> 6) & 0x03) != 0x03) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (group != 2 && group != 4 && group != 6) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.imm_size = 1;
         inst.immediate = code[offset++];
     }
     else if (inst.opcode == 0x73) {
         if (((inst.modrm >> 6) & 0x03) != 0x03) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (group != 2 && group != 3 && group != 6 && group != 7) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.imm_size = 1;
         inst.immediate = code[offset++];
@@ -415,7 +415,7 @@ void execute_sse2_shift(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
                 sse2_shift_apply_psllw(src_bytes, count, result_bytes);
             }
             else {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
         }
         else if (inst.opcode == 0x72) {
@@ -429,7 +429,7 @@ void execute_sse2_shift(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
                 sse2_shift_apply_pslld(src_bytes, count, result_bytes);
             }
             else {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
         }
         else {
@@ -446,7 +446,7 @@ void execute_sse2_shift(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
                 sse2_shift_apply_pslldq(src_bytes, count, result_bytes);
             }
             else {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
         }
     }
@@ -479,7 +479,7 @@ void execute_sse2_shift(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
             sse2_shift_apply_psllq(src_bytes, count, result_bytes);
             break;
         default:
-            raise_ud();
+            raise_ud_ctx(ctx);
             break;
         }
     }

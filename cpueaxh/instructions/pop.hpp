@@ -105,7 +105,7 @@ void pop_sreg64(CPU_CONTEXT* ctx, int seg_index) {
 
 void decode_modrm_pop(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst->has_modrm = true;
     inst->modrm = code[(*offset)++];
@@ -116,7 +116,7 @@ void decode_modrm_pop(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
     // SIB byte present when rm==4 and mod!=3 (not in 16-bit addressing)
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -138,7 +138,7 @@ void decode_modrm_pop(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->displacement = 0;
         for (int i = 0; i < inst->disp_size; i++) {
@@ -192,7 +192,7 @@ DecodedInstruction decode_pop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         }
         else if (prefix == 0xF0) {
             // LOCK prefix is #UD for POP
-            raise_ud();
+            raise_ud_ctx(ctx);
             return inst;
         }
         else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
@@ -205,7 +205,7 @@ DecodedInstruction decode_pop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -243,7 +243,7 @@ DecodedInstruction decode_pop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     case 0x8F:
         decode_modrm_pop(ctx, &inst, code, code_size, &offset);
         if (((inst.modrm >> 3) & 0x07) != 0) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         // In 64-bit mode, 32-bit operand size is not encodable
         if (ctx->cs.descriptor.long_mode && inst.operand_size == 32) {
@@ -263,28 +263,28 @@ DecodedInstruction decode_pop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     // 1F - POP DS (invalid in 64-bit mode)
     case 0x1F:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     // 07 - POP ES (invalid in 64-bit mode)
     case 0x07:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     // 17 - POP SS (invalid in 64-bit mode)
     case 0x17:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     // 0F xx - two-byte opcodes (POP FS / POP GS)
     case 0x0F:
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.opcode = code[offset++];
         if (inst.opcode == 0xA1) {
@@ -294,7 +294,7 @@ DecodedInstruction decode_pop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
             // POP GS
         }
         else {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         // Store a marker so executor knows this was a 0x0F-prefixed instruction
         inst.has_modrm = false;
@@ -302,7 +302,7 @@ DecodedInstruction decode_pop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

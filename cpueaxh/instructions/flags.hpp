@@ -46,17 +46,17 @@ DecodedInstruction decode_flags_instruction(CPU_CONTEXT* ctx, uint8_t* code, siz
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xF8 && inst.opcode != 0xF9 &&
         inst.opcode != 0xFC && inst.opcode != 0xFD) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;
@@ -82,6 +82,6 @@ void execute_flags(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         set_flag(ctx, RFLAGS_DF, true);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }

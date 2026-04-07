@@ -59,21 +59,6 @@ inline void cpu_exception_reset(CPU_EXCEPTION_STATE* state) {
     state->error_code = 0;
 }
 
-inline CPU_CONTEXT*& cpu_active_context_slot() {
-    CPUEAXH_ACTIVE_CONTEXT_STORAGE CPU_CONTEXT* current_ctx = nullptr;
-    return current_ctx;
-}
-
-inline CPU_CONTEXT* cpu_get_active_context() {
-    return cpu_active_context_slot();
-}
-
-inline CPU_CONTEXT* cpu_set_active_context(CPU_CONTEXT* ctx) {
-    CPU_CONTEXT* previous = cpu_active_context_slot();
-    cpu_active_context_slot() = ctx;
-    return previous;
-}
-
 enum SegmentRegisterIndex {
     SEG_ES = 0,
     SEG_CS = 1,
@@ -175,8 +160,124 @@ struct CPU_CONTEXT {
     CPU_EXCEPTION_STATE exception;
 };
 
+struct CPU_SCALAR_SNAPSHOT {
+    uint64_t regs[16];
+    uint64_t control_regs[16];
+    SegmentRegister es;
+    SegmentRegister cs;
+    SegmentRegister ss;
+    SegmentRegister ds;
+    SegmentRegister fs;
+    SegmentRegister gs;
+    uint64_t rip;
+    uint64_t rflags;
+    uint8_t cpl;
+    uint64_t gdtr_base;
+    uint16_t gdtr_limit;
+    uint64_t ldtr_base;
+    uint16_t ldtr_limit;
+    bool rex_present;
+    bool rex_w;
+    bool rex_r;
+    bool rex_x;
+    bool rex_b;
+    bool operand_size_override;
+    bool address_size_override;
+    int last_inst_size;
+};
+
+struct CPU_VECTOR_SNAPSHOT {
+    XMMRegister xmm[16];
+    XMMRegister ymm_upper[16];
+    uint64_t mm[8];
+    uint32_t mxcsr;
+};
+
+inline void cpu_capture_scalar_snapshot(CPU_SCALAR_SNAPSHOT* out, const CPU_CONTEXT* ctx) {
+    if (!out || !ctx) {
+        return;
+    }
+
+    CPUEAXH_MEMCPY(out->regs, ctx->regs, sizeof(out->regs));
+    CPUEAXH_MEMCPY(out->control_regs, ctx->control_regs, sizeof(out->control_regs));
+    out->es = ctx->es;
+    out->cs = ctx->cs;
+    out->ss = ctx->ss;
+    out->ds = ctx->ds;
+    out->fs = ctx->fs;
+    out->gs = ctx->gs;
+    out->rip = ctx->rip;
+    out->rflags = ctx->rflags;
+    out->cpl = ctx->cpl;
+    out->gdtr_base = ctx->gdtr_base;
+    out->gdtr_limit = ctx->gdtr_limit;
+    out->ldtr_base = ctx->ldtr_base;
+    out->ldtr_limit = ctx->ldtr_limit;
+    out->rex_present = ctx->rex_present;
+    out->rex_w = ctx->rex_w;
+    out->rex_r = ctx->rex_r;
+    out->rex_x = ctx->rex_x;
+    out->rex_b = ctx->rex_b;
+    out->operand_size_override = ctx->operand_size_override;
+    out->address_size_override = ctx->address_size_override;
+    out->last_inst_size = ctx->last_inst_size;
+}
+
+inline void cpu_restore_scalar_snapshot(CPU_CONTEXT* ctx, const CPU_SCALAR_SNAPSHOT* snapshot) {
+    if (!ctx || !snapshot) {
+        return;
+    }
+
+    CPUEAXH_MEMCPY(ctx->regs, snapshot->regs, sizeof(snapshot->regs));
+    CPUEAXH_MEMCPY(ctx->control_regs, snapshot->control_regs, sizeof(snapshot->control_regs));
+    ctx->es = snapshot->es;
+    ctx->cs = snapshot->cs;
+    ctx->ss = snapshot->ss;
+    ctx->ds = snapshot->ds;
+    ctx->fs = snapshot->fs;
+    ctx->gs = snapshot->gs;
+    ctx->rip = snapshot->rip;
+    ctx->rflags = snapshot->rflags;
+    ctx->cpl = snapshot->cpl;
+    ctx->gdtr_base = snapshot->gdtr_base;
+    ctx->gdtr_limit = snapshot->gdtr_limit;
+    ctx->ldtr_base = snapshot->ldtr_base;
+    ctx->ldtr_limit = snapshot->ldtr_limit;
+    ctx->rex_present = snapshot->rex_present;
+    ctx->rex_w = snapshot->rex_w;
+    ctx->rex_r = snapshot->rex_r;
+    ctx->rex_x = snapshot->rex_x;
+    ctx->rex_b = snapshot->rex_b;
+    ctx->operand_size_override = snapshot->operand_size_override;
+    ctx->address_size_override = snapshot->address_size_override;
+    ctx->last_inst_size = snapshot->last_inst_size;
+}
+
+inline void cpu_capture_vector_snapshot(CPU_VECTOR_SNAPSHOT* out, const CPU_CONTEXT* ctx) {
+    if (!out || !ctx) {
+        return;
+    }
+
+    CPUEAXH_MEMCPY(out->xmm, ctx->xmm, sizeof(out->xmm));
+    CPUEAXH_MEMCPY(out->ymm_upper, ctx->ymm_upper, sizeof(out->ymm_upper));
+    CPUEAXH_MEMCPY(out->mm, ctx->mm, sizeof(out->mm));
+    out->mxcsr = ctx->mxcsr;
+}
+
+inline void cpu_restore_vector_snapshot(CPU_CONTEXT* ctx, const CPU_VECTOR_SNAPSHOT* snapshot) {
+    if (!ctx || !snapshot) {
+        return;
+    }
+
+    CPUEAXH_MEMCPY(ctx->xmm, snapshot->xmm, sizeof(snapshot->xmm));
+    CPUEAXH_MEMCPY(ctx->ymm_upper, snapshot->ymm_upper, sizeof(snapshot->ymm_upper));
+    CPUEAXH_MEMCPY(ctx->mm, snapshot->mm, sizeof(snapshot->mm));
+    ctx->mxcsr = snapshot->mxcsr;
+}
+
 void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value);
 bool cpu_notify_invalid_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value);
+bool cpu_has_hook_type(const CPU_CONTEXT* ctx, uint32_t type);
 
 inline bool cpu_has_exception(const CPU_CONTEXT* ctx) {
     return ctx && ctx->exception.code != CPU_EXCEPTION_NONE;
@@ -195,16 +296,16 @@ inline void cpu_raise_exception(CPU_CONTEXT* ctx, uint32_t code, uint32_t error_
     ctx->exception.error_code = error_code;
 }
 
-#define raise_de()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_DE, 0)
-#define raise_gp(ec)  cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_GP, (uint32_t)(ec))
-#define raise_ss(ec)  cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_SS, (uint32_t)(ec))
-#define raise_np(ec)  cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_NP, (uint32_t)(ec))
-#define raise_ud()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_UD, 0)
-#define raise_pf(ec)  cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_PF, (uint32_t)(ec))
-#define raise_ac()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_AC, 0)
-#define raise_bp()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_BP, 0)
-#define raise_db()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_DB, 0)
-#define raise_of()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_OF, 0)
+inline void raise_de_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_DE, 0); }
+inline void raise_gp_ctx(CPU_CONTEXT* ctx, uint32_t error_code) { cpu_raise_exception(ctx, CPU_EXCEPTION_GP, error_code); }
+inline void raise_ss_ctx(CPU_CONTEXT* ctx, uint32_t error_code) { cpu_raise_exception(ctx, CPU_EXCEPTION_SS, error_code); }
+inline void raise_np_ctx(CPU_CONTEXT* ctx, uint32_t error_code) { cpu_raise_exception(ctx, CPU_EXCEPTION_NP, error_code); }
+inline void raise_ud_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_UD, 0); }
+inline void raise_pf_ctx(CPU_CONTEXT* ctx, uint32_t error_code) { cpu_raise_exception(ctx, CPU_EXCEPTION_PF, error_code); }
+inline void raise_ac_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_AC, 0); }
+inline void raise_bp_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_BP, 0); }
+inline void raise_db_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_DB, 0); }
+inline void raise_of_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_OF, 0); }
 
 struct DecodedInstruction {
     uint8_t opcode;

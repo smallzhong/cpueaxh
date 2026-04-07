@@ -27,7 +27,7 @@ uint64_t get_stos_index(CPU_CONTEXT* ctx, int address_size) {
     case 16: return get_reg16(ctx, REG_RDI);
     case 32: return get_reg32(ctx, REG_RDI);
     case 64: return get_reg64(ctx, REG_RDI);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -43,7 +43,7 @@ void set_stos_index(CPU_CONTEXT* ctx, int address_size, uint64_t value) {
         set_reg64(ctx, REG_RDI, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -58,7 +58,7 @@ uint64_t read_stos_accumulator(CPU_CONTEXT* ctx, int operand_size) {
     case 16: return get_reg16(ctx, REG_RAX);
     case 32: return get_reg32(ctx, REG_RAX);
     case 64: return get_reg64(ctx, REG_RAX);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -77,7 +77,7 @@ void write_stos_value(CPU_CONTEXT* ctx, uint64_t address, int operand_size, uint
         write_memory_qword(ctx, address, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -127,16 +127,16 @@ DecodedInstruction decode_stos_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xAA && inst.opcode != 0xAB) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = decode_stos_operand_size(ctx, inst.opcode);

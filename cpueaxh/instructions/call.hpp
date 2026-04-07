@@ -65,7 +65,7 @@ void call_far_mem(CPU_CONTEXT* ctx, uint64_t mem_addr, int operand_size, uint64_
 
     // Validate new selector
     if (is_null_selector(new_selector)) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     // Load the descriptor for the new code segment
@@ -75,12 +75,12 @@ void call_far_mem(CPU_CONTEXT* ctx, uint64_t mem_addr, int operand_size, uint64_
     // We handle code segment case here; call gates are not implemented
     if (!is_code_segment(new_desc.type)) {
         // Could be a call gate - but we only handle code segments
-        raise_gp(new_selector & 0xFFFC);
+        raise_gp_ctx(ctx, new_selector & 0xFFFC);
     }
 
     // L=1 and D=1 is invalid in long mode
     if (ctx->cs.descriptor.long_mode && new_desc.long_mode && new_desc.db) {
-        raise_gp(new_selector & 0xFFFC);
+        raise_gp_ctx(ctx, new_selector & 0xFFFC);
     }
 
     uint8_t rpl = new_selector & 0x03;
@@ -88,21 +88,21 @@ void call_far_mem(CPU_CONTEXT* ctx, uint64_t mem_addr, int operand_size, uint64_
     if (is_conforming_code_segment(new_desc.type)) {
         // Conforming: DPL must not be greater than CPL
         if (new_desc.dpl > ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
     }
     else {
         // Non-conforming: DPL must equal CPL, RPL must not be greater than CPL
         if (new_desc.dpl != ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
         if (rpl > ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
     }
 
     if (!new_desc.present) {
-        raise_np(new_selector & 0xFFFC);
+        raise_np_ctx(ctx, new_selector & 0xFFFC);
     }
 
     // Truncate offset based on target mode
@@ -147,33 +147,33 @@ void call_far_mem(CPU_CONTEXT* ctx, uint64_t mem_addr, int operand_size, uint64_
 void call_far_ptr(CPU_CONTEXT* ctx, uint16_t new_selector, uint32_t new_offset, int operand_size, uint64_t return_rip) {
     // Validate new selector
     if (is_null_selector(new_selector)) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     SegmentDescriptor new_desc = load_descriptor_from_table(ctx, new_selector);
 
     if (!is_code_segment(new_desc.type)) {
-        raise_gp(new_selector & 0xFFFC);
+        raise_gp_ctx(ctx, new_selector & 0xFFFC);
     }
 
     uint8_t rpl = new_selector & 0x03;
 
     if (is_conforming_code_segment(new_desc.type)) {
         if (new_desc.dpl > ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
     }
     else {
         if (new_desc.dpl != ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
         if (rpl > ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
     }
 
     if (!new_desc.present) {
-        raise_np(new_selector & 0xFFFC);
+        raise_np_ctx(ctx, new_selector & 0xFFFC);
     }
 
     uint32_t target_eip = new_offset;
@@ -203,7 +203,7 @@ void call_far_ptr(CPU_CONTEXT* ctx, uint16_t new_selector, uint32_t new_offset, 
 
 void decode_modrm_call(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst->has_modrm = true;
     inst->modrm = code[(*offset)++];
@@ -214,7 +214,7 @@ void decode_modrm_call(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
     // SIB byte present when rm==4 and mod!=3 (not in 16-bit addressing)
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -236,7 +236,7 @@ void decode_modrm_call(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->displacement = 0;
         for (int i = 0; i < inst->disp_size; i++) {
@@ -290,7 +290,7 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         }
         else if (prefix == 0xF0) {
             // LOCK prefix is #UD for CALL
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
             prefix == 0x64 || prefix == 0x65 || prefix == 0xF2 || prefix == 0xF3) {
@@ -302,7 +302,7 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -365,7 +365,7 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             }
         }
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -391,7 +391,7 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
                 uint8_t mod = (inst.modrm >> 6) & 0x03;
                 // Far call must use memory operand (mod != 3)
                 if (mod == 3) {
-                    raise_ud();
+                    raise_ud_ctx(ctx);
                 }
                 // In 64-bit mode: if REX.W, operand size = 64 (m16:64)
                 // otherwise if 0x66, operand size = 16 (m16:16)
@@ -409,7 +409,7 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
                 }
             }
             else {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
         }
         break;
@@ -417,13 +417,13 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     // 9A cd/cp - CALL ptr16:16 / CALL ptr16:32 (invalid in 64-bit mode)
     case 0x9A:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         // Read immediate far pointer: offset then selector
         if (inst.operand_size == 32) {
             // ptr16:32 - 6 bytes: 4-byte offset + 2-byte selector
             if (offset + 6 > code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = 0;
             for (int i = 0; i < 4; i++) {
@@ -438,7 +438,7 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         else {
             // ptr16:16 - 4 bytes: 2-byte offset + 2-byte selector
             if (offset + 4 > code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = 0;
             for (int i = 0; i < 2; i++) {
@@ -453,7 +453,7 @@ DecodedInstruction decode_call_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;

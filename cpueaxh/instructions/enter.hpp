@@ -67,7 +67,7 @@ void enter_push32(CPU_CONTEXT* ctx, int stack_addr_size, uint32_t value) {
 
 void enter_push64(CPU_CONTEXT* ctx, int stack_addr_size, uint64_t value) {
     if (stack_addr_size == 16) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     uint64_t sp = enter_get_stack_pointer_value(ctx, stack_addr_size);
@@ -86,7 +86,7 @@ uint32_t enter_read_frame32(CPU_CONTEXT* ctx, int stack_addr_size) {
 
 uint64_t enter_read_frame64(CPU_CONTEXT* ctx, int stack_addr_size) {
     if (stack_addr_size == 16) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     return read_memory_qword(ctx, enter_get_frame_pointer_address(ctx, stack_addr_size));
 }
@@ -137,20 +137,20 @@ DecodedInstruction decode_enter_instruction(CPU_CONTEXT* ctx, uint8_t* code, siz
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xC8) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset + 3 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     uint16_t alloc_size = (uint16_t)code[offset] | ((uint16_t)code[offset + 1] << 8);

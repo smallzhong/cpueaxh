@@ -28,17 +28,17 @@ static bool mov_decode_control_register_operands(CPU_CONTEXT* ctx, uint8_t modrm
     uint8_t decoded_general_register = (uint8_t)((modrm & 0x07) | (ctx->rex_b ? 0x08 : 0x00));
 
     if (ctx->rex_r && decoded_control_register != REG_CR8) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return false;
     }
 
     if (!is_valid_control_register(decoded_control_register)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return false;
     }
 
     if (ctx->cpl != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         return false;
     }
 
@@ -56,19 +56,19 @@ static bool mov_validate_control_register_write(CPU_CONTEXT* ctx, uint8_t contro
     case REG_CR0:
         if ((value & (1ull << 31)) == 0 || ((value & (1ull << 0)) == 0 && (value & (1ull << 31)) != 0) ||
             ((value & (1ull << 29)) != 0 && (value & (1ull << 30)) == 0)) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             return false;
         }
         break;
     case REG_CR4:
         if ((value & (1ull << 5)) == 0) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             return false;
         }
         break;
     case REG_CR8:
         if ((value & ~0xFull) != 0) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             return false;
         }
         break;
@@ -295,7 +295,7 @@ void mov_rm16_sreg(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, u
 
     SegmentRegister* sreg = get_segment_register(ctx, reg);
     if (!sreg) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     uint16_t value = sreg->selector;
@@ -319,7 +319,7 @@ void mov_r32_sreg(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, ui
 
     SegmentRegister* sreg = get_segment_register(ctx, reg);
     if (!sreg) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     uint32_t value = sreg->selector;
@@ -343,7 +343,7 @@ void mov_r64_sreg(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, ui
 
     SegmentRegister* sreg = get_segment_register(ctx, reg);
     if (!sreg) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     uint64_t value = sreg->selector;
@@ -366,7 +366,7 @@ void mov_sreg_rm16(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, u
     }
 
     if (reg == SEG_CS) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     uint16_t selector;
@@ -390,7 +390,7 @@ void mov_sreg_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, u
     }
 
     if (reg == SEG_CS) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     uint16_t selector;
@@ -530,7 +530,7 @@ void mov_rm64_imm32(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, 
 
 void decode_modrm_mov(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst->has_modrm = true;
     inst->modrm = code[(*offset)++];
@@ -541,7 +541,7 @@ void decode_modrm_mov(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
     // SIB byte present when rm==4 and mod!=3 (not in 16-bit addressing)
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -563,7 +563,7 @@ void decode_modrm_mov(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->displacement = 0;
         for (int i = 0; i < inst->disp_size; i++) {
@@ -583,10 +583,8 @@ void decode_modrm_mov(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 }
 
 void decode_modrm_mov_cr(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
-    (void)ctx;
-
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         return;
     }
 
@@ -633,7 +631,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
             prefix == 0x64 || prefix == 0x65 || prefix == 0xF0 || prefix == 0xF2 || prefix == 0xF3) {
             // LOCK prefix is #UD for MOV
             if (prefix == 0xF0) {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
 
             int seg_override = decode_mov_segment_override(prefix);
@@ -649,13 +647,13 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode == 0x0F) {
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             ctx->last_inst_size = (int)offset;
             return inst;
         }
@@ -728,7 +726,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         inst.operand_size = 8;
         inst.imm_size = inst.address_size / 8;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -741,7 +739,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     case 0xA1:
         inst.imm_size = inst.address_size / 8;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -755,7 +753,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         inst.operand_size = 8;
         inst.imm_size = inst.address_size / 8;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -768,7 +766,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     case 0xA3:
         inst.imm_size = inst.address_size / 8;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -783,7 +781,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         inst.operand_size = 8;
         inst.imm_size = 1;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
         break;
@@ -801,7 +799,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
             inst.imm_size = 4;
         }
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -815,11 +813,11 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         decode_modrm_mov(ctx, &inst, code, code_size, &offset);
         // The manual specifies C6 /0: the reg field of ModRM must be 0
         if (((inst.modrm >> 3) & 0x07) != 0) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         inst.imm_size = 1;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
         break;
@@ -829,7 +827,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         decode_modrm_mov(ctx, &inst, code, code_size, &offset);
         // The manual specifies C7 /0: the reg field of ModRM must be 0
         if (((inst.modrm >> 3) & 0x07) != 0) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (ctx->rex_w) {
             inst.imm_size = 4;
@@ -841,7 +839,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
             inst.imm_size = 4;
         }
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -850,7 +848,7 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

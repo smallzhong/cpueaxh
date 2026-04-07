@@ -26,7 +26,7 @@ int decode_sse2_shuffle_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse2_shuffle(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -37,7 +37,7 @@ void decode_modrm_sse2_shuffle(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -58,7 +58,7 @@ void decode_modrm_sse2_shuffle(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -75,7 +75,7 @@ void decode_modrm_sse2_shuffle(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (mod != 3) {
@@ -136,29 +136,29 @@ DecodedInstruction decode_sse2_shuffle_instruction(CPU_CONTEXT* ctx, uint8_t* co
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x14 && inst.opcode != 0x15 && inst.opcode != 0x70 &&
         inst.opcode != 0xC5 && inst.opcode != 0xC6) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if ((inst.opcode == 0x14 || inst.opcode == 0x15 || inst.opcode == 0xC5 || inst.opcode == 0xC6) && *mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (inst.opcode == 0x70 && *mandatory_prefix != 0x66 && *mandatory_prefix != 0xF2 && *mandatory_prefix != 0xF3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -173,7 +173,7 @@ DecodedInstruction decode_sse2_shuffle_instruction(CPU_CONTEXT* ctx, uint8_t* co
     *has_imm8 = inst.opcode == 0xC5 || inst.opcode == 0xC6 || inst.opcode == 0x70;
     if (*has_imm8) {
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.imm_size = 1;
         inst.immediate = code[offset++];
@@ -279,7 +279,7 @@ void execute_sse2_shuffle(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = decode_sse2_shuffle_instruction(ctx, code, code_size, &mandatory_prefix, &has_imm8);
     if (inst.opcode == 0xC5) {
         if (((inst.modrm >> 6) & 0x03) != 3) {
-            raise_ud();
+            raise_ud_ctx(ctx);
             return;
         }
 
@@ -334,5 +334,5 @@ void execute_sse2_shuffle(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         }
     }
 
-    raise_ud();
+    raise_ud_ctx(ctx);
 }

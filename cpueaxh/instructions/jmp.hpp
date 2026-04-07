@@ -53,19 +53,19 @@ void jmp_abs16(CPU_CONTEXT* ctx, uint16_t target) {
 void jmp_far(CPU_CONTEXT* ctx, uint16_t new_selector, uint64_t new_offset, int operand_size) {
     // NULL selector check
     if (is_null_selector(new_selector)) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     SegmentDescriptor new_desc = load_descriptor_from_table(ctx, new_selector);
 
     // Must be a code segment (call gates not implemented here)
     if (!is_code_segment(new_desc.type)) {
-        raise_gp(new_selector & 0xFFFC);
+        raise_gp_ctx(ctx, new_selector & 0xFFFC);
     }
 
     // L=1 and D=1 simultaneously is invalid in long mode
     if (ctx->cs.descriptor.long_mode && new_desc.long_mode && new_desc.db) {
-        raise_gp(new_selector & 0xFFFC);
+        raise_gp_ctx(ctx, new_selector & 0xFFFC);
     }
 
     uint8_t rpl = new_selector & 0x03;
@@ -73,22 +73,22 @@ void jmp_far(CPU_CONTEXT* ctx, uint16_t new_selector, uint64_t new_offset, int o
     if (is_conforming_code_segment(new_desc.type)) {
         // Conforming: DPL must not be greater than CPL
         if (new_desc.dpl > ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
     }
     else {
         // Non-conforming: DPL must equal CPL; RPL must not exceed CPL
         // (Unlike CALL, JMP cannot change privilege level)
         if (new_desc.dpl != ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
         if (rpl > ctx->cpl) {
-            raise_gp(new_selector & 0xFFFC);
+            raise_gp_ctx(ctx, new_selector & 0xFFFC);
         }
     }
 
     if (!new_desc.present) {
-        raise_np(new_selector & 0xFFFC);
+        raise_np_ctx(ctx, new_selector & 0xFFFC);
     }
 
     // Truncate offset based on target mode
@@ -115,7 +115,7 @@ void jmp_far(CPU_CONTEXT* ctx, uint16_t new_selector, uint64_t new_offset, int o
 
 void decode_modrm_jmp(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst->has_modrm = true;
     inst->modrm = code[(*offset)++];
@@ -126,7 +126,7 @@ void decode_modrm_jmp(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
     // SIB byte present when rm==4 and mod!=3 (not in 16-bit addressing)
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -148,7 +148,7 @@ void decode_modrm_jmp(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->displacement = 0;
         for (int i = 0; i < inst->disp_size; i++) {
@@ -202,7 +202,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         }
         else if (prefix == 0xF0) {
             // LOCK prefix is #UD for JMP
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
             prefix == 0x64 || prefix == 0x65 || prefix == 0xF2 || prefix == 0xF3) {
@@ -214,7 +214,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -252,7 +252,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     case 0xEB:
         inst.imm_size = 1;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
         break;
@@ -262,7 +262,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         if (ctx->cs.descriptor.long_mode) {
             // rel16 not supported in 64-bit mode
             if (ctx->operand_size_override) {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
             inst.imm_size = 4;
         }
@@ -270,7 +270,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
             inst.imm_size = ctx->operand_size_override ? 2 : 4;
         }
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = 0;
         for (int i = 0; i < inst.imm_size; i++) {
@@ -294,7 +294,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
             // Far indirect: must be memory operand
             uint8_t mod = (inst.modrm >> 6) & 0x03;
             if (mod == 3) {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
             // Operand size for far pointer: REX.W ¡ú m16:64, default ¡ú m16:32, 0x66 ¡ú m16:16
             if (ctx->cs.descriptor.long_mode) {
@@ -310,7 +310,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
             }
         }
         else {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
     }
@@ -318,13 +318,13 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     // EA cd/cp - JMP ptr16:16 / JMP ptr16:32 (far direct, invalid in 64-bit mode)
     case 0xEA:
         if (ctx->cs.descriptor.long_mode) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         // Read far pointer: offset then selector
         if (inst.operand_size == 32) {
             // ptr16:32 ¡ª 4-byte offset + 2-byte selector
             if (offset + 6 > code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = 0;
             for (int i = 0; i < 4; i++) {
@@ -339,7 +339,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         else {
             // ptr16:16 ¡ª 2-byte offset + 2-byte selector
             if (offset + 4 > code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = 0;
             for (int i = 0; i < 2; i++) {
@@ -354,7 +354,7 @@ DecodedInstruction decode_jmp_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;

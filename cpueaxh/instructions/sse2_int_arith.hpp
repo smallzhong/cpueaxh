@@ -18,7 +18,7 @@ int decode_sse2_int_arith_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse2_int_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse2_int_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uin
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse2_int_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uin
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,7 +71,7 @@ void decode_modrm_sse2_int_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uin
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -128,11 +128,11 @@ DecodedInstruction decode_sse2_int_arith_instruction(CPU_CONTEXT* ctx, uint8_t* 
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
@@ -143,15 +143,15 @@ DecodedInstruction decode_sse2_int_arith_instruction(CPU_CONTEXT* ctx, uint8_t* 
         inst.opcode != 0xED && inst.opcode != 0xEE && inst.opcode != 0xF4 && inst.opcode != 0xF5 &&
         inst.opcode != 0xF6 && inst.opcode != 0xF8 && inst.opcode != 0xF9 && inst.opcode != 0xFA &&
         inst.opcode != 0xFB && inst.opcode != 0xFC && inst.opcode != 0xFD && inst.opcode != 0xFE) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (*mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -457,7 +457,7 @@ void execute_sse2_int_arith(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         }
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         break;
     }
 

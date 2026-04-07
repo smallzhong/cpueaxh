@@ -28,7 +28,7 @@ uint64_t read_imul_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -37,7 +37,7 @@ uint64_t read_imul_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -48,7 +48,7 @@ uint64_t read_imul_reg_operand(CPU_CONTEXT* ctx, uint8_t modrm, int operand_size
     case 16: return get_reg16(ctx, reg);
     case 32: return get_reg32(ctx, reg);
     case 64: return get_reg64(ctx, reg);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -59,7 +59,7 @@ void write_imul_reg_operand(CPU_CONTEXT* ctx, uint8_t modrm, int operand_size, u
     case 16: set_reg16(ctx, reg, (uint16_t)value); break;
     case 32: set_reg32(ctx, reg, (uint32_t)value); break;
     case 64: set_reg64(ctx, reg, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
@@ -250,7 +250,7 @@ void imul_r64_rm64_imm32(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t d
 
 void decode_modrm_imul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -261,7 +261,7 @@ void decode_modrm_imul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -282,7 +282,7 @@ void decode_modrm_imul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -303,7 +303,7 @@ void decode_modrm_imul(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -355,7 +355,7 @@ DecodedInstruction decode_imul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -376,11 +376,11 @@ DecodedInstruction decode_imul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 
     if (inst.opcode == 0x0F) {
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.opcode = code[offset++];
         if (inst.opcode != 0xAF) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         decode_modrm_imul(ctx, &inst, code, code_size, &offset, has_lock_prefix);
     }
@@ -391,7 +391,7 @@ DecodedInstruction decode_imul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             inst.operand_size = 8;
             decode_modrm_imul(ctx, &inst, code, code_size, &offset, has_lock_prefix);
             if (((inst.modrm >> 3) & 0x07) != 5) {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
             break;
 
@@ -399,7 +399,7 @@ DecodedInstruction decode_imul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         case 0xF7:
             decode_modrm_imul(ctx, &inst, code, code_size, &offset, has_lock_prefix);
             if (((inst.modrm >> 3) & 0x07) != 5) {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
             break;
 
@@ -408,7 +408,7 @@ DecodedInstruction decode_imul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             decode_modrm_imul(ctx, &inst, code, code_size, &offset, has_lock_prefix);
             inst.imm_size = 1;
             if (offset + inst.imm_size > code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = code[offset++];
             break;
@@ -426,7 +426,7 @@ DecodedInstruction decode_imul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
                 inst.imm_size = 4;
             }
             if (offset + inst.imm_size > code_size) {
-                raise_gp(0);
+                raise_gp_ctx(ctx, 0);
             }
             inst.immediate = 0;
             for (int i = 0; i < inst.imm_size; i++) {
@@ -435,7 +435,7 @@ DecodedInstruction decode_imul_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             break;
 
         default:
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
     }
 

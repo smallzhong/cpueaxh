@@ -58,10 +58,6 @@ inline void cpueaxh_platform_free(void* ptr) {
 #define CPUEAXH_FREE(ptr) cpueaxh_platform_free(ptr)
 #endif
 
-#ifndef CPUEAXH_ACTIVE_CONTEXT_STORAGE
-#define CPUEAXH_ACTIVE_CONTEXT_STORAGE static
-#endif
-
 inline uint64_t cpueaxh_udiv128_fallback(uint64_t high, uint64_t low, uint64_t divisor, uint64_t* remainder) {
     uint64_t quotient = 0;
     uint64_t rem = high;
@@ -114,10 +110,6 @@ inline uint64_t cpueaxh_udiv128(uint64_t high, uint64_t low, uint64_t divisor, u
 
 #ifndef CPUEAXH_FREE
 #define CPUEAXH_FREE(ptr) free((ptr))
-#endif
-
-#ifndef CPUEAXH_ACTIVE_CONTEXT_STORAGE
-#define CPUEAXH_ACTIVE_CONTEXT_STORAGE static thread_local
 #endif
 
 inline uint64_t cpueaxh_udiv128(uint64_t high, uint64_t low, uint64_t divisor, uint64_t* remainder) {

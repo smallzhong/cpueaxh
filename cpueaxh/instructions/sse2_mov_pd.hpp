@@ -26,7 +26,7 @@ int decode_sse2_mov_pd_gpr_reg_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse2_mov_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -37,7 +37,7 @@ void decode_modrm_sse2_mov_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -58,7 +58,7 @@ void decode_modrm_sse2_mov_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -79,7 +79,7 @@ void decode_modrm_sse2_mov_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -136,30 +136,30 @@ DecodedInstruction decode_sse2_mov_pd_instruction(CPU_CONTEXT* ctx, uint8_t* cod
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x10 && inst.opcode != 0x11 && inst.opcode != 0x12 && inst.opcode != 0x13 &&
         inst.opcode != 0x16 && inst.opcode != 0x17 && inst.opcode != 0x28 && inst.opcode != 0x29 && inst.opcode != 0x50) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix || *mandatory_prefix == 0) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (inst.opcode == 0x10 || inst.opcode == 0x11) {
         if (*mandatory_prefix != 0x66 && *mandatory_prefix != 0xF2) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
     }
     else if (*mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -173,10 +173,10 @@ DecodedInstruction decode_sse2_mov_pd_instruction(CPU_CONTEXT* ctx, uint8_t* cod
 
     uint8_t mod = (inst.modrm >> 6) & 0x03;
     if ((inst.opcode == 0x12 || inst.opcode == 0x13 || inst.opcode == 0x16 || inst.opcode == 0x17) && mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
     if (inst.opcode == 0x50 && mod != 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;
@@ -185,9 +185,9 @@ DecodedInstruction decode_sse2_mov_pd_instruction(CPU_CONTEXT* ctx, uint8_t* cod
     return inst;
 }
 
-void validate_movapd_memory_alignment(const DecodedInstruction* inst) {
+void validate_movapd_memory_alignment(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
     if ((inst->mem_address & 0x0FULL) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
@@ -224,7 +224,7 @@ void execute_movupd_pd(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
 void execute_movapd_pd(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
     uint8_t mod = (inst->modrm >> 6) & 0x03;
     if (mod != 3) {
-        validate_movapd_memory_alignment(inst);
+        validate_movapd_memory_alignment(ctx, inst);
     }
 
     if (inst->opcode == 0x28) {
@@ -330,6 +330,6 @@ void execute_sse2_mov_pd(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         execute_movmskpd_pd(ctx, &inst);
         return;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }

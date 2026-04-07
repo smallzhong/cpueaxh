@@ -18,7 +18,7 @@ int decode_sse_math_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse_math(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse_math(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* 
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse_math(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* 
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,7 +71,7 @@ void decode_modrm_sse_math(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* 
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -128,24 +128,24 @@ DecodedInstruction decode_sse_math_instruction(CPU_CONTEXT* ctx, uint8_t* code, 
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x51 && inst.opcode != 0x52 && inst.opcode != 0x53 && inst.opcode != 0x5D && inst.opcode != 0x5F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix || *mandatory_prefix == 0x66 || *mandatory_prefix == 0xF2) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (*mandatory_prefix != 0 && *mandatory_prefix != 0xF3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -284,7 +284,7 @@ void execute_sse_math(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
             low_result = _mm_cvtss_f32(_mm_rcp_ss(rhs_vec));
             break;
         default:
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
 
         set_sse_math_lane_bits(&result, 0, sse_math_float_to_bits(low_result));
@@ -305,6 +305,6 @@ void execute_sse_math(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         set_xmm128(ctx, dest, sse_math_m128_to_xmm(_mm_rcp_ps(rhs_vec)));
         return;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }

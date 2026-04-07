@@ -19,7 +19,7 @@ SegmentDescriptor load_descriptor_from_table(CPU_CONTEXT* ctx, uint16_t selector
 
     uint64_t desc_offset = (uint64_t)index * 8;
     if (desc_offset + 7 > table_limit) {
-        raise_gp(selector & 0xFFFC);
+        raise_gp_ctx(ctx, selector & 0xFFFC);
         return desc;
     }
 
@@ -79,7 +79,7 @@ SegmentRegister* get_segment_register(CPU_CONTEXT* ctx, int index) {
     case SEG_FS: return &ctx->fs;
     case SEG_GS: return &ctx->gs;
     default:
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         return &dummy;
     }
 }
@@ -90,7 +90,7 @@ bool is_valid_control_register(uint8_t index) {
 
 uint64_t get_control_register(CPU_CONTEXT* ctx, uint8_t index) {
     if (!ctx || !is_valid_control_register(index)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return 0;
     }
 
@@ -99,7 +99,7 @@ uint64_t get_control_register(CPU_CONTEXT* ctx, uint8_t index) {
 
 void set_control_register(CPU_CONTEXT* ctx, uint8_t index, uint64_t value) {
     if (!ctx || !is_valid_control_register(index)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return;
     }
 
@@ -108,7 +108,7 @@ void set_control_register(CPU_CONTEXT* ctx, uint8_t index, uint64_t value) {
 
 void load_segment_register(CPU_CONTEXT* ctx, int seg_index, uint16_t selector) {
     if (seg_index == SEG_CS) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return;
     }
 
@@ -116,7 +116,7 @@ void load_segment_register(CPU_CONTEXT* ctx, int seg_index, uint16_t selector) {
 
     if (seg_index == SEG_SS) {
         if (is_null_selector(selector)) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         SegmentDescriptor desc = load_descriptor_from_table(ctx, selector);
@@ -125,19 +125,19 @@ void load_segment_register(CPU_CONTEXT* ctx, int seg_index, uint16_t selector) {
         }
 
         if (rpl != ctx->cpl) {
-            raise_gp(selector & 0xFFFC);
+            raise_gp_ctx(ctx, selector & 0xFFFC);
         }
 
         if (!is_writable_data_segment(desc.type)) {
-            raise_gp(selector & 0xFFFC);
+            raise_gp_ctx(ctx, selector & 0xFFFC);
         }
 
         if (desc.dpl != ctx->cpl) {
-            raise_gp(selector & 0xFFFC);
+            raise_gp_ctx(ctx, selector & 0xFFFC);
         }
 
         if (!desc.present) {
-            raise_ss(selector & 0xFFFC);
+            raise_ss_ctx(ctx, selector & 0xFFFC);
         }
 
         ctx->ss.selector = selector;
@@ -158,17 +158,17 @@ void load_segment_register(CPU_CONTEXT* ctx, int seg_index, uint16_t selector) {
             }
 
             if (!is_data_segment(desc.type) && !is_readable_code_segment(desc.type)) {
-                raise_gp(selector & 0xFFFC);
+                raise_gp_ctx(ctx, selector & 0xFFFC);
             }
 
             if (is_data_segment(desc.type) || !is_conforming_code_segment(desc.type)) {
                 if (rpl > desc.dpl || ctx->cpl > desc.dpl) {
-                    raise_gp(selector & 0xFFFC);
+                    raise_gp_ctx(ctx, selector & 0xFFFC);
                 }
             }
 
             if (!desc.present) {
-                raise_np(selector & 0xFFFC);
+                raise_np_ctx(ctx, selector & 0xFFFC);
             }
 
             seg->selector = selector;
@@ -476,7 +476,7 @@ void push_value64(CPU_CONTEXT* ctx, uint64_t value) {
     }
     else {
         // 16-bit stack address doesn't support 64-bit pushes
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
@@ -542,7 +542,7 @@ uint64_t pop_value64(CPU_CONTEXT* ctx) {
     }
     else {
         // 16-bit stack address doesn't support 64-bit pops
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         value = 0; // unreachable, suppress warning
     }
     return value;

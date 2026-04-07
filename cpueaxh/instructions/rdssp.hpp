@@ -111,12 +111,12 @@ inline bool decode_rdssp_common(CPU_CONTEXT* ctx, uint8_t* code, size_t code_siz
     }
 
     if (offset + 3 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         return false;
     }
 
     if (code[offset++] != 0x0F || code[offset++] != 0x1E) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return false;
     }
 
@@ -126,7 +126,7 @@ inline bool decode_rdssp_common(CPU_CONTEXT* ctx, uint8_t* code, size_t code_siz
     uint8_t reg = (uint8_t)((inst.modrm >> 3) & 0x07);
 
     if (has_lock_prefix || !has_f3_prefix || reg != 1 || mod != 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return false;
     }
 
@@ -158,7 +158,7 @@ inline void execute_rdssp(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
 
     uint32_t instruction_size = 0;
     if (!probe_rdssp_instruction(code, code_size, NULL, &instruction_size)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return;
     }
 

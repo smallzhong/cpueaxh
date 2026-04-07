@@ -93,18 +93,18 @@ inline bool decode_endbr_common(CPU_CONTEXT* ctx, uint8_t* code, size_t code_siz
     }
 
     if (offset + 3 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         return false;
     }
 
     if (code[offset++] != 0x0F || code[offset++] != 0x1E) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return false;
     }
 
     uint8_t opcode3 = code[offset++];
     if (has_lock_prefix || !has_f3_prefix || (opcode3 != 0xFA && opcode3 != 0xFB)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return false;
     }
 
@@ -135,7 +135,7 @@ inline void execute_endbr(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     }
 
     if (!probe_endbr_instruction(code, code_size)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return;
     }
 

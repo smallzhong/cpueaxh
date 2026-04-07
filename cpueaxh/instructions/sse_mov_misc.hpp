@@ -18,7 +18,7 @@ int decode_sse_mov_misc_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse_mov_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse_mov_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse_mov_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -67,15 +67,15 @@ void decode_modrm_sse_mov_misc(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if ((inst->opcode == 0x13 || inst->opcode == 0x17) && mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (inst->opcode == 0x50 && mod != 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (mod != 3) {
@@ -130,20 +130,20 @@ DecodedInstruction decode_sse_mov_misc_instruction(CPU_CONTEXT* ctx, uint8_t* co
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x12 && inst.opcode != 0x13 && inst.opcode != 0x16 && inst.opcode != 0x17 && inst.opcode != 0x50) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -258,7 +258,7 @@ void execute_sse_mov_misc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         execute_movmskps_misc(ctx, &inst);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         break;
     }
 }

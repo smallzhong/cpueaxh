@@ -28,7 +28,7 @@ uint64_t read_or_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, 
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -37,7 +37,7 @@ uint64_t read_or_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, 
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -51,7 +51,7 @@ void write_or_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int
         case 16: set_reg16(ctx, rm, (uint16_t)value); break;
         case 32: set_reg32(ctx, rm, (uint32_t)value); break;
         case 64: set_reg64(ctx, rm, value); break;
-        default: raise_ud();
+        default: raise_ud_ctx(ctx);
         }
         return;
     }
@@ -61,7 +61,7 @@ void write_or_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int
     case 16: write_memory_word(ctx, mem_addr, (uint16_t)value); break;
     case 32: write_memory_dword(ctx, mem_addr, (uint32_t)value); break;
     case 64: write_memory_qword(ctx, mem_addr, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
@@ -73,7 +73,7 @@ uint64_t read_or_reg_operand(CPU_CONTEXT* ctx, uint8_t modrm, int operand_size) 
     case 16: return get_reg16(ctx, reg);
     case 32: return get_reg32(ctx, reg);
     case 64: return get_reg64(ctx, reg);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -85,7 +85,7 @@ void write_or_reg_operand(CPU_CONTEXT* ctx, uint8_t modrm, int operand_size, uin
     case 16: set_reg16(ctx, reg, (uint16_t)value); break;
     case 32: set_reg32(ctx, reg, (uint32_t)value); break;
     case 64: set_reg64(ctx, reg, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
@@ -95,7 +95,7 @@ void update_or_logic_flags(CPU_CONTEXT* ctx, int operand_size, uint64_t result) 
     case 16: update_flags_or16(ctx, (uint16_t)result); break;
     case 32: update_flags_or32(ctx, (uint32_t)result); break;
     case 64: update_flags_or64(ctx, result); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 
@@ -279,7 +279,7 @@ void or_r64_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uin
 
 void decode_modrm_or(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -290,7 +290,7 @@ void decode_modrm_or(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, 
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -311,7 +311,7 @@ void decode_modrm_or(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, 
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -332,7 +332,7 @@ void decode_modrm_or(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, 
     }
 
     if (has_lock_prefix && mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -384,7 +384,7 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -410,11 +410,11 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     case 0x0C:
         inst.operand_size = 8;
         if (has_lock_prefix) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         inst.imm_size = 1;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
         break;
@@ -422,7 +422,7 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     // 0D iw/id - OR AX, imm16 / OR EAX, imm32 / REX.W + OR RAX, imm32
     case 0x0D:
         if (has_lock_prefix) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (ctx->rex_w) {
             inst.imm_size = 4;
@@ -434,7 +434,7 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
             inst.imm_size = 4;
         }
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         for (int i = 0; i < inst.imm_size; i++) {
             inst.immediate |= ((uint64_t)code[offset++]) << (i * 8);
@@ -446,11 +446,11 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
         inst.operand_size = 8;
         decode_modrm_or(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 1) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         inst.imm_size = 1;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
         break;
@@ -459,7 +459,7 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     case 0x81:
         decode_modrm_or(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 1) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         if (ctx->rex_w) {
             inst.imm_size = 4;
@@ -471,7 +471,7 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
             inst.imm_size = 4;
         }
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         for (int i = 0; i < inst.imm_size; i++) {
             inst.immediate |= ((uint64_t)code[offset++]) << (i * 8);
@@ -482,11 +482,11 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     case 0x83:
         decode_modrm_or(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 1) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         inst.imm_size = 1;
         if (offset + inst.imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
         break;
@@ -506,7 +506,7 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     case 0x0A:
         inst.operand_size = 8;
         if (has_lock_prefix) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         decode_modrm_or(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         break;
@@ -514,13 +514,13 @@ DecodedInstruction decode_or_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     // 0B /r - OR r16, r/m16 / OR r32, r/m32 / REX.W + OR r64, r/m64
     case 0x0B:
         if (has_lock_prefix) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         decode_modrm_or(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

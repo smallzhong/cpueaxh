@@ -47,19 +47,19 @@ DecodedInstruction decode_rdtscp_instruction(CPU_CONTEXT* ctx, uint8_t* code, si
     }
 
     if (offset + 3 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (code[offset++] != 0x01 || code[offset++] != 0xF9) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = 0xF9;

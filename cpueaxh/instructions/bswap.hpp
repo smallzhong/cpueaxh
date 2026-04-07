@@ -71,25 +71,25 @@ DecodedInstruction decode_bswap_instruction(CPU_CONTEXT* ctx, uint8_t* code, siz
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode < 0xC8 || inst.opcode > 0xCF) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = ctx->rex_w ? 64 : 32;

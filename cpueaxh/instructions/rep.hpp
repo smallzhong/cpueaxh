@@ -41,7 +41,7 @@ uint64_t get_rep_count(CPU_CONTEXT* ctx, int address_size) {
     case 16: return get_reg16(ctx, REG_RCX);
     case 32: return get_reg32(ctx, REG_RCX);
     case 64: return get_reg64(ctx, REG_RCX);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -57,7 +57,7 @@ void set_rep_count(CPU_CONTEXT* ctx, int address_size, uint64_t value) {
         set_reg64(ctx, REG_RCX, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -79,7 +79,7 @@ DecodedInstruction decode_rep_target(CPU_CONTEXT* ctx, uint8_t opcode, uint8_t* 
     case 0xAF:
         return decode_scas_instruction(ctx, code, code_size);
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         return DecodedInstruction{};
     }
 }
@@ -107,7 +107,7 @@ void execute_rep_iteration(CPU_CONTEXT* ctx, uint8_t opcode, uint8_t* code, size
         execute_scas(ctx, code, code_size);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -115,16 +115,16 @@ void execute_rep(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     size_t prefix_len = 0;
     uint8_t rep_prefix = decode_rep_prefix(code, code_size, &prefix_len);
     if (rep_prefix != 0xF2 && rep_prefix != 0xF3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (prefix_len >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     uint8_t opcode = code[prefix_len];
     if (!is_rep_string_opcode(opcode)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     DecodedInstruction inst = decode_rep_target(ctx, opcode, code, code_size);

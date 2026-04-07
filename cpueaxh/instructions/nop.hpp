@@ -2,7 +2,7 @@
 
 static void decode_nop_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         return;
     }
 
@@ -14,13 +14,13 @@ static void decode_nop_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t
     uint8_t rm = inst->modrm & 0x07;
 
     if (reg != 0) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return;
     }
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             return;
         }
 
@@ -43,7 +43,7 @@ static void decode_nop_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
             return;
         }
 
@@ -115,7 +115,7 @@ DecodedInstruction decode_nop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.address_size = ctx->address_size_override ? 32 : 64;
@@ -123,17 +123,17 @@ DecodedInstruction decode_nop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     inst.opcode = code[offset++];
     if (inst.opcode == 0x90) {
         if (has_lock_prefix || has_pause_prefix || ctx->rex_b) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
     }
     else if (inst.opcode == 0x0F) {
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         else {
             uint8_t opcode2 = code[offset++];
             if (opcode2 != 0x1F || has_lock_prefix || has_pause_prefix) {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
             else {
                 inst.opcode = opcode2;
@@ -142,7 +142,7 @@ DecodedInstruction decode_nop_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
         }
     }
     else {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;

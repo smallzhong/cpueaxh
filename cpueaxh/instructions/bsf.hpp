@@ -25,7 +25,7 @@ uint64_t read_bsf_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -33,7 +33,7 @@ uint64_t read_bsf_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr,
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -51,16 +51,16 @@ void write_bsf_reg_operand(CPU_CONTEXT* ctx, uint8_t modrm, int operand_size, ui
         set_reg64(ctx, reg, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
-uint64_t get_bsf_operand_mask(int operand_size) {
+uint64_t get_bsf_operand_mask(CPU_CONTEXT* ctx, int operand_size) {
     switch (operand_size) {
     case 16: return 0xFFFFULL;
     case 32: return 0xFFFFFFFFULL;
     case 64: return 0xFFFFFFFFFFFFFFFFULL;
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -106,7 +106,7 @@ uint64_t count_leading_zeros_bsf(uint64_t value, int operand_size) {
 
 void decode_modrm_bsf(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -117,7 +117,7 @@ void decode_modrm_bsf(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -138,7 +138,7 @@ void decode_modrm_bsf(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -159,7 +159,7 @@ void decode_modrm_bsf(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code,
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -213,21 +213,21 @@ DecodedInstruction decode_bsf_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xBC && inst.opcode != 0xBD) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = 32;
@@ -255,7 +255,7 @@ DecodedInstruction decode_bsf_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
 
 void execute_bsf(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = decode_bsf_instruction(ctx, code, code_size);
-    uint64_t source = read_bsf_rm_operand(ctx, inst.modrm, inst.mem_address, inst.operand_size) & get_bsf_operand_mask(inst.operand_size);
+    uint64_t source = read_bsf_rm_operand(ctx, inst.modrm, inst.mem_address, inst.operand_size) & get_bsf_operand_mask(ctx, inst.operand_size);
 
     if (inst.mandatory_prefix == 0xF3) {
         uint64_t result = (inst.opcode == 0xBC)

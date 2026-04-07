@@ -44,6 +44,19 @@ inline bool cpu_try_handle_invalid_memory_access(CPU_CONTEXT* ctx, uint64_t addr
     return cpu_notify_invalid_memory_hook(ctx, cpu_get_invalid_memory_hook_type(access, protection_violation), address, size, value);
 }
 
+inline size_t cpu_page_bytes_remaining(uint64_t address) {
+    return (size_t)(CPUEAXH_PAGE_SIZE - (address & (CPUEAXH_PAGE_SIZE - 1)));
+}
+
+inline bool cpu_can_use_page_fast_path(const CPU_CONTEXT* ctx) {
+    return ctx && ctx->mem_mgr && ctx->mem_mgr->patch_count == 0;
+}
+
+inline bool cpu_has_invalid_memory_hooks_for_access(const CPU_CONTEXT* ctx, uint32_t access) {
+    return cpu_has_hook_type(ctx, cpu_get_invalid_memory_hook_type(access, false)) ||
+        cpu_has_hook_type(ctx, cpu_get_invalid_memory_hook_type(access, true));
+}
+
 inline MM_ACCESS_STATUS cpu_resolve_memory_access(CPU_CONTEXT* ctx, uint64_t address, uint32_t access, uint8_t** out_ptr,
     uint64_t reported_address = 0, size_t reported_size = 1, uint64_t reported_value = 0) {
     if (!ctx || cpu_has_exception(ctx)) {
@@ -55,6 +68,33 @@ inline MM_ACCESS_STATUS cpu_resolve_memory_access(CPU_CONTEXT* ctx, uint64_t add
 
     if (reported_address == 0) {
         reported_address = address;
+    }
+
+    if (!cpu_has_invalid_memory_hooks_for_access(ctx, access)) {
+        uint32_t cpu_attrs = 0;
+        MM_ACCESS_STATUS status = mm_get_ptr_checked(ctx->mem_mgr, address, access, out_ptr, &cpu_attrs);
+        if (status == MM_ACCESS_UNMAPPED) {
+            if (out_ptr) {
+                *out_ptr = NULL;
+            }
+            cpu_raise_page_fault(ctx, access, false);
+            return status;
+        }
+        if (status == MM_ACCESS_PROT) {
+            if (out_ptr) {
+                *out_ptr = NULL;
+            }
+            cpu_raise_page_fault(ctx, access, true);
+            return status;
+        }
+        if (ctx->cpl == 3 && (cpu_attrs & MM_CPU_ATTR_USER) == 0) {
+            if (out_ptr) {
+                *out_ptr = NULL;
+            }
+            cpu_raise_page_fault(ctx, access, true);
+            return MM_ACCESS_PROT;
+        }
+        return MM_ACCESS_OK;
     }
 
     for (int attempt = 0; attempt < 4; attempt++) {
@@ -108,7 +148,9 @@ inline uint8_t read_memory_byte(CPU_CONTEXT* ctx, uint64_t address) {
         return 0;
     }
     uint8_t value = *ptr;
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 1, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_READ)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 1, value);
+    }
     return value;
 }
 
@@ -118,7 +160,9 @@ inline uint8_t read_memory_exec_byte(CPU_CONTEXT* ctx, uint64_t address) {
         return 0;
     }
     uint8_t value = *ptr;
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_FETCH, address, 1, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_FETCH)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_FETCH, address, 1, value);
+    }
     return value;
 }
 
@@ -127,13 +171,44 @@ inline void write_memory_byte(CPU_CONTEXT* ctx, uint64_t address, uint8_t value)
     if (cpu_resolve_memory_access(ctx, address, MM_PROT_WRITE, &ptr, address, 1, value) != MM_ACCESS_OK) {
         return;
     }
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 1, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_WRITE)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 1, value);
+    }
     *ptr = value;
 }
 
 inline uint8_t* cpu_get_contiguous_ptr(CPU_CONTEXT* ctx, uint64_t address, size_t size, uint32_t access, uint64_t value = 0) {
     if (!ctx || size == 0 || cpu_has_exception(ctx)) {
         return NULL;
+    }
+
+    if (cpu_can_use_page_fast_path(ctx)) {
+        uint8_t* base_ptr = NULL;
+        size_t offset = 0;
+
+        while (offset < size) {
+            uint8_t* page_ptr = NULL;
+            const uint64_t current_address = address + offset;
+            if (cpu_resolve_memory_access(ctx, current_address, access, &page_ptr, address, size, value) != MM_ACCESS_OK) {
+                return NULL;
+            }
+
+            if (!base_ptr) {
+                base_ptr = page_ptr;
+            }
+            else if (page_ptr != base_ptr + offset) {
+                if (cpu_try_handle_invalid_memory_access(ctx, address, access, true, size, value)) {
+                    return cpu_get_contiguous_ptr(ctx, address, size, access, value);
+                }
+                cpu_raise_page_fault(ctx, access, true);
+                return NULL;
+            }
+
+            const size_t chunk = cpu_page_bytes_remaining(current_address);
+            offset += (chunk < (size - offset)) ? chunk : (size - offset);
+        }
+
+        return base_ptr;
     }
 
     uint8_t* base_ptr = NULL;
@@ -176,7 +251,9 @@ inline uint16_t read_memory_word(CPU_CONTEXT* ctx, uint64_t address) {
         return 0;
     }
     uint16_t value = (uint16_t)ptr[0] | ((uint16_t)ptr[1] << 8);
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 2, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_READ)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 2, value);
+    }
     return value;
 }
 
@@ -189,7 +266,9 @@ inline void write_memory_word(CPU_CONTEXT* ctx, uint64_t address, uint16_t value
     if (!ptr) {
         return;
     }
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 2, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_WRITE)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 2, value);
+    }
     ptr[0] = (uint8_t)(value & 0xFF);
     ptr[1] = (uint8_t)((value >> 8) & 0xFF);
 }
@@ -207,7 +286,9 @@ inline uint32_t read_memory_dword(CPU_CONTEXT* ctx, uint64_t address) {
         ((uint32_t)ptr[1] << 8) |
         ((uint32_t)ptr[2] << 16) |
         ((uint32_t)ptr[3] << 24);
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 4, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_READ)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 4, value);
+    }
     return value;
 }
 
@@ -220,7 +301,9 @@ inline void write_memory_dword(CPU_CONTEXT* ctx, uint64_t address, uint32_t valu
     if (!ptr) {
         return;
     }
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 4, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_WRITE)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 4, value);
+    }
     ptr[0] = (uint8_t)(value & 0xFF);
     ptr[1] = (uint8_t)((value >> 8) & 0xFF);
     ptr[2] = (uint8_t)((value >> 16) & 0xFF);
@@ -244,7 +327,9 @@ inline uint64_t read_memory_qword(CPU_CONTEXT* ctx, uint64_t address) {
         ((uint64_t)ptr[5] << 40) |
         ((uint64_t)ptr[6] << 48) |
         ((uint64_t)ptr[7] << 56);
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 8, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_READ)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_READ, address, 8, value);
+    }
     return value;
 }
 
@@ -257,7 +342,9 @@ inline void write_memory_qword(CPU_CONTEXT* ctx, uint64_t address, uint64_t valu
     if (!ptr) {
         return;
     }
-    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 8, value);
+    if (cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_WRITE)) {
+        cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_WRITE, address, 8, value);
+    }
     ptr[0] = (uint8_t)(value & 0xFF);
     ptr[1] = (uint8_t)((value >> 8) & 0xFF);
     ptr[2] = (uint8_t)((value >> 16) & 0xFF);
@@ -268,13 +355,13 @@ inline void write_memory_qword(CPU_CONTEXT* ctx, uint64_t address, uint64_t valu
     ptr[7] = (uint8_t)((value >> 56) & 0xFF);
 }
 
-inline uint64_t cpu_memory_operand_mask(int operand_size) {
+inline uint64_t cpu_memory_operand_mask(CPU_CONTEXT* ctx, int operand_size) {
     switch (operand_size) {
     case 8:  return 0xFFULL;
     case 16: return 0xFFFFULL;
     case 32: return 0xFFFFFFFFULL;
     case 64: return 0xFFFFFFFFFFFFFFFFULL;
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -284,7 +371,7 @@ inline uint64_t read_memory_operand(CPU_CONTEXT* ctx, uint64_t address, int oper
     case 16: return read_memory_word(ctx, address);
     case 32: return read_memory_dword(ctx, address);
     case 64: return read_memory_qword(ctx, address);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -294,7 +381,7 @@ inline void write_memory_operand(CPU_CONTEXT* ctx, uint64_t address, int operand
     case 16: write_memory_word(ctx, address, (uint16_t)value); break;
     case 32: write_memory_dword(ctx, address, (uint32_t)value); break;
     case 64: write_memory_qword(ctx, address, value); break;
-    default: raise_ud(); break;
+    default: raise_ud_ctx(ctx); break;
     }
 }
 
@@ -321,15 +408,15 @@ inline bool cpu_atomic_compare_exchange_memory(CPU_CONTEXT* ctx, uint64_t addres
         old_value = (uint64_t)_InterlockedCompareExchange64((volatile long long*)ptr, (long long)desired_value, (long long)expected_value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         return false;
     }
 
-    old_value &= cpu_memory_operand_mask(operand_size);
+    old_value &= cpu_memory_operand_mask(ctx, operand_size);
     if (previous_value) {
         *previous_value = old_value;
     }
-    return old_value == (expected_value & cpu_memory_operand_mask(operand_size));
+    return old_value == (expected_value & cpu_memory_operand_mask(ctx, operand_size));
 }
 
 typedef uint64_t(*cpu_atomic_rmw_callback)(uint64_t current_value, void* user_data);
@@ -337,7 +424,7 @@ typedef uint64_t(*cpu_atomic_rmw_callback)(uint64_t current_value, void* user_da
 inline bool cpu_atomic_rmw_memory(CPU_CONTEXT* ctx, uint64_t address, int operand_size,
                                   cpu_atomic_rmw_callback callback, void* user_data,
                                   uint64_t* old_value_out, uint64_t* new_value_out) {
-    uint64_t mask = cpu_memory_operand_mask(operand_size);
+    uint64_t mask = cpu_memory_operand_mask(ctx, operand_size);
     uint64_t current_value = read_memory_operand(ctx, address, operand_size) & mask;
     if (cpu_has_exception(ctx)) {
         return false;

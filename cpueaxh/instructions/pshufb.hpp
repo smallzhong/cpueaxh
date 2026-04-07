@@ -18,7 +18,7 @@ static int decode_pshufb_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 static void decode_modrm_pshufb(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ static void decode_modrm_pshufb(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ static void decode_modrm_pshufb(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,13 +71,13 @@ static void decode_modrm_pshufb(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint
     }
 }
 
-static void validate_pshufb_xmm_alignment(const DecodedInstruction* inst) {
+static void validate_pshufb_xmm_alignment(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
     if (!inst || ((inst->modrm >> 6) & 0x03) == 0x03) {
         return;
     }
 
     if ((inst->mem_address & 0x0FULL) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
@@ -186,29 +186,29 @@ inline DecodedInstruction decode_pshufb_instruction(CPU_CONTEXT* ctx, uint8_t* c
     }
 
     if (has_lock_prefix || has_unsupported_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return inst;
     }
 
     if (mandatory_prefix != 0 && mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return inst;
     }
 
     if (offset + 4 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
         return inst;
     }
 
     if (code[offset++] != 0x0F || code[offset++] != 0x38) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return inst;
     }
 
     inst.opcode = code[offset++];
     inst.mandatory_prefix = mandatory_prefix;
     if (inst.opcode != 0x00) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         return inst;
     }
 
@@ -242,7 +242,7 @@ inline void execute_pshufb(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     }
 
     if (xmm_form) {
-        validate_pshufb_xmm_alignment(&inst);
+        validate_pshufb_xmm_alignment(ctx, &inst);
         if (cpu_has_exception(ctx)) {
             return;
         }

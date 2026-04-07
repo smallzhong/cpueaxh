@@ -35,7 +35,7 @@ static int decode_pcmpestri_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 static void decode_modrm_pcmpestri(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -46,7 +46,7 @@ static void decode_modrm_pcmpestri(CPU_CONTEXT* ctx, DecodedInstruction* inst, u
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -67,7 +67,7 @@ static void decode_modrm_pcmpestri(CPU_CONTEXT* ctx, DecodedInstruction* inst, u
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -163,20 +163,20 @@ DecodedInstruction decode_pcmpestri_instruction(CPU_CONTEXT* ctx, uint8_t* code,
     }
 
     if (has_lock_prefix || has_unsupported_prefix || mandatory_prefix != 0x66) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset + 4 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F || code[offset++] != 0x3A) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x61) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -190,7 +190,7 @@ DecodedInstruction decode_pcmpestri_instruction(CPU_CONTEXT* ctx, uint8_t* code,
 
     inst.imm_size = 1;
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst.immediate = code[offset++];
 

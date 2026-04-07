@@ -24,14 +24,14 @@ uint64_t read_movsx_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_add
         switch (operand_size) {
         case 8:  return get_reg8(ctx, rm);
         case 16: return get_reg16(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
     switch (operand_size) {
     case 8:  return read_memory_byte(ctx, mem_addr);
     case 16: return read_memory_word(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -49,7 +49,7 @@ void write_movsx_reg_operand(CPU_CONTEXT* ctx, uint8_t modrm, int operand_size, 
         set_reg64(ctx, reg, (uint64_t)value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -90,7 +90,7 @@ void movsx_r64_rm16(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, 
 
 void decode_modrm_movsx(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -101,7 +101,7 @@ void decode_modrm_movsx(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* cod
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -122,7 +122,7 @@ void decode_modrm_movsx(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* cod
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -143,7 +143,7 @@ void decode_modrm_movsx(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* cod
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -193,21 +193,21 @@ DecodedInstruction decode_movsx_instruction(CPU_CONTEXT* ctx, uint8_t* code, siz
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xBE && inst.opcode != 0xBF) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = 32;
@@ -226,7 +226,7 @@ DecodedInstruction decode_movsx_instruction(CPU_CONTEXT* ctx, uint8_t* code, siz
     }
 
     if (inst.opcode == 0xBF && inst.operand_size == 16) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     decode_modrm_movsx(ctx, &inst, code, code_size, &offset, has_lock_prefix);

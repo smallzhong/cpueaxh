@@ -6,7 +6,7 @@ static uint16_t x87_default_control_word() {
 
 static void decode_x87_control_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -17,7 +17,7 @@ static void decode_x87_control_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst,
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -38,7 +38,7 @@ static void decode_x87_control_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst,
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -109,11 +109,11 @@ static DecodedInstruction decode_x87_control_instruction(CPU_CONTEXT* ctx, uint8
     }
 
     if (offset >= code_size || code[offset++] != 0xD9) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix || has_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -128,7 +128,7 @@ static DecodedInstruction decode_x87_control_instruction(CPU_CONTEXT* ctx, uint8
     const uint8_t mod = (inst.modrm >> 6) & 0x03;
     const uint8_t reg = (inst.modrm >> 3) & 0x07;
     if (reg != 7 || mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;

@@ -59,6 +59,8 @@ struct MEMORY_MANAGER {
     MM_PATCH_ENTRY* patches;
     size_t patch_count;
     size_t patch_capacity;
+    uint64_t patch_min_address;
+    uint64_t patch_max_address;
     uint64_t next_patch_handle;
     bool host_read_passthrough;
     bool host_write_passthrough;
@@ -76,6 +78,41 @@ struct MM_ACCESS_INFO {
 inline bool mm_patch_range_overlaps(uint64_t left_address, uint64_t left_size, uint64_t right_address, uint64_t right_size);
 inline const MM_PATCH_ENTRY* mm_find_patch_const(const MEMORY_MANAGER* mgr, uint64_t address);
 inline bool mm_query(MEMORY_MANAGER* mgr, uint64_t address, MM_ACCESS_INFO* out_info);
+
+inline bool mm_patch_bounds_may_contain(const MEMORY_MANAGER* mgr, uint64_t address) {
+    return mgr && mgr->patch_count != 0 && address >= mgr->patch_min_address && address <= mgr->patch_max_address;
+}
+
+inline void mm_rebuild_patch_bounds(MEMORY_MANAGER* mgr) {
+    if (!mgr || mgr->patch_count == 0) {
+        if (mgr) {
+            mgr->patch_min_address = 0;
+            mgr->patch_max_address = 0;
+        }
+        return;
+    }
+
+    uint64_t min_address = (uint64_t)-1;
+    uint64_t max_address = 0;
+    for (size_t index = 0; index < mgr->patch_count; ++index) {
+        const MM_PATCH_ENTRY* patch = &mgr->patches[index];
+        if (patch->size == 0) {
+            continue;
+        }
+
+        if (patch->address < min_address) {
+            min_address = patch->address;
+        }
+
+        const uint64_t patch_end = patch->address + patch->size - 1;
+        if (patch_end > max_address) {
+            max_address = patch_end;
+        }
+    }
+
+    mgr->patch_min_address = min_address == (uint64_t)-1 ? 0 : min_address;
+    mgr->patch_max_address = max_address;
+}
 
 inline uint64_t align_up_page(uint64_t size) {
     return (size + CPUEAXH_PAGE_SIZE - 1) & CPUEAXH_PAGE_MASK;
@@ -235,7 +272,7 @@ inline bool mm_reserve_patch_capacity(MEMORY_MANAGER* mgr, size_t capacity) {
 }
 
 inline MM_PATCH_ENTRY* mm_find_patch(MEMORY_MANAGER* mgr, uint64_t address) {
-    if (!mgr) {
+    if (!mm_patch_bounds_may_contain(mgr, address)) {
         return NULL;
     }
 
@@ -286,6 +323,13 @@ inline MM_PATCH_STATUS mm_add_patch(MEMORY_MANAGER* mgr, uint64_t* out_handle, u
     patch->address = address;
     patch->size = size;
     patch->data = patch_bytes;
+    const uint64_t patch_end = address + size - 1;
+    if (mgr->patch_count == 1 || address < mgr->patch_min_address) {
+        mgr->patch_min_address = address;
+    }
+    if (mgr->patch_count == 1 || patch_end > mgr->patch_max_address) {
+        mgr->patch_max_address = patch_end;
+    }
     *out_handle = patch->handle;
     return MM_PATCH_OK;
 }
@@ -316,6 +360,7 @@ inline MM_PATCH_STATUS mm_del_patch(MEMORY_MANAGER* mgr, uint64_t handle) {
         if (mgr->patch_count < mgr->patch_capacity) {
             CPUEAXH_MEMSET(&mgr->patches[mgr->patch_count], 0, sizeof(MM_PATCH_ENTRY));
         }
+        mm_rebuild_patch_bounds(mgr);
         return MM_PATCH_OK;
     }
 
@@ -836,7 +881,7 @@ inline MM_ACCESS_STATUS mm_get_ptr_checked(MEMORY_MANAGER* mgr, uint64_t address
     }
 
     const MM_PATCH_ENTRY* patch = NULL;
-    if (mm_host_passthrough_perms(mgr) != 0) {
+    if (mgr->patch_count != 0 && mm_host_passthrough_perms(mgr) != 0 && mm_patch_bounds_may_contain(mgr, address)) {
         patch = mm_find_patch_const(mgr, address);
     }
 

@@ -17,6 +17,39 @@
 // Fetch up to MAX_INST_FETCH bytes from virtual memory starting at addr.
 // Returns the number of bytes actually read.
 static int fetch_instruction_bytes(CPU_CONTEXT* ctx, uint64_t addr, uint8_t* buf) {
+    if (!ctx || !buf || cpu_has_exception(ctx)) {
+        return 0;
+    }
+
+    if (cpu_can_use_page_fast_path(ctx)) {
+        const bool notify_fetch = cpu_has_hook_type(ctx, CPUEAXH_HOOK_MEM_FETCH);
+        int n = 0;
+
+        while (n < MAX_INST_FETCH) {
+            const uint64_t current_address = addr + (uint64_t)n;
+            uint8_t* ptr = NULL;
+            if (cpu_resolve_memory_access(ctx, current_address, MM_PROT_EXEC, &ptr, current_address, 1, 0) != MM_ACCESS_OK) {
+                break;
+            }
+
+            size_t chunk = cpu_page_bytes_remaining(current_address);
+            const size_t remaining = (size_t)(MAX_INST_FETCH - n);
+            if (chunk > remaining) {
+                chunk = remaining;
+            }
+
+            CPUEAXH_MEMCPY(buf + n, ptr, chunk);
+            if (notify_fetch) {
+                for (size_t offset = 0; offset < chunk; offset++) {
+                    cpu_notify_memory_hook(ctx, CPUEAXH_HOOK_MEM_FETCH, current_address + offset, 1, buf[n + (int)offset]);
+                }
+            }
+
+            n += (int)chunk;
+        }
+        return n;
+    }
+
     int n = 0;
     for (int i = 0; i < MAX_INST_FETCH; i++) {
         uint8_t b = read_memory_exec_byte(ctx, addr + i);
@@ -103,19 +136,60 @@ static uint8_t peek_modrm_reg_field(const uint8_t* buf, int fetched, int prefix_
     return (pos < fetched) ? (uint8_t)((buf[pos] >> 3) & 0x07) : 0xFF;
 }
 
+static bool cpu_step_may_touch_vector_state(const uint8_t* buf, int fetched, int prefix_len, uint16_t opc, uint8_t mandatory_prefix) {
+    if (fetched <= 0 || !buf) {
+        return false;
+    }
+
+    if (buf[0] == 0xC5 || buf[0] == 0xC4) {
+        return true;
+    }
+
+    if (opc <= 0x00FF) {
+        return false;
+    }
+
+    if ((opc >= 0x0F40 && opc <= 0x0F4F) ||
+        (opc >= 0x0F80 && opc <= 0x0F8F) ||
+        (opc >= 0x0F90 && opc <= 0x0F9F) ||
+        opc == 0x0FA0 || opc == 0x0FA1 || opc == 0x0FA2 || opc == 0x0FA8 || opc == 0x0FA9 ||
+        opc == 0x0FAF ||
+        opc == 0x0FB0 || opc == 0x0FB1 || opc == 0x0FB6 || opc == 0x0FB7 || opc == 0x0FBC || opc == 0x0FBD || opc == 0x0FBE || opc == 0x0FBF ||
+        opc == 0x0FA3 || opc == 0x0FAB || opc == 0x0FB3 || opc == 0x0FBB || opc == 0x0FBA ||
+        opc == 0x0FC0 || opc == 0x0FC1 ||
+        (opc >= 0x0FC8 && opc <= 0x0FCF) ||
+        opc == 0x0F00 || opc == 0x0F01 || opc == 0x0F05 || opc == 0x0F20 || opc == 0x0F22 || opc == 0x0F31 || opc == 0x0F34 || opc == 0x0F1F) {
+        return false;
+    }
+
+    if (opc == 0x0FC7 || opc == 0x0F1E) {
+        return false;
+    }
+
+    if ((opc == 0x0F0D || opc == 0x0F18) ||
+        (opc == 0x0F2B && mandatory_prefix == 0x00)) {
+        return opc == 0x0F2B;
+    }
+
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // cpu_step - execute one instruction at ctx->rip
 // ---------------------------------------------------------------------------
-int cpu_step(CPU_CONTEXT* ctx) {
+static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_bytes, int prefetched_size) {
     if (cpu_has_exception(ctx)) {
         return CPU_STEP_EXCEPTION;
     }
 
-    CPU_CONTEXT saved_ctx = *ctx;
-    CPU_CONTEXT* previous_active_ctx = cpu_set_active_context(ctx);
+    CPU_SCALAR_SNAPSHOT saved_scalar;
+    CPU_VECTOR_SNAPSHOT saved_vector;
+    bool scalar_snapshot_valid = false;
+    bool vector_snapshot_valid = false;
     cpu_clear_exception(ctx);
 
-    uint8_t buf[MAX_INST_FETCH] = {};
+    uint8_t local_buf[MAX_INST_FETCH];
+    uint8_t* buf = local_buf;
     int result_code = CPU_STEP_OK;
     int fetched = 0;
     int prefix_len = 0;
@@ -135,13 +209,24 @@ int cpu_step(CPU_CONTEXT* ctx) {
     uint8_t ff_reg = 0xFF;
     uint8_t group2_reg = 0xFF;
 
-    fetched = fetch_instruction_bytes(ctx, ctx->rip, buf);
+    if (prefetched_bytes && prefetched_size > 0) {
+        fetched = prefetched_size > MAX_INST_FETCH ? MAX_INST_FETCH : prefetched_size;
+        buf = const_cast<uint8_t*>(prefetched_bytes);
+    }
+    else {
+        fetched = fetch_instruction_bytes(ctx, ctx->rip, local_buf);
+    }
     if (fetched == 0) {
         result_code = cpu_has_exception(ctx) ? CPU_STEP_EXCEPTION : CPU_STEP_FETCH_ERR;
         goto cpu_step_finish;
     }
 
     if (buf[0] == 0xC5 || buf[0] == 0xC4) {
+        cpu_capture_scalar_snapshot(&saved_scalar, ctx);
+        scalar_snapshot_valid = true;
+        cpu_capture_vector_snapshot(&saved_vector, ctx);
+        vector_snapshot_valid = true;
+
         execute_avx_vex(ctx, buf, (size_t)fetched);
         if (cpu_has_exception(ctx)) {
             result_code = CPU_STEP_EXCEPTION;
@@ -173,7 +258,22 @@ int cpu_step(CPU_CONTEXT* ctx) {
 
     // HLT (F4) is escape-owned.
     if (opc == 0x00F4) {
-        raise_ud();
+        raise_ud_ctx(ctx);
+        result_code = CPU_STEP_UD;
+        goto cpu_step_finish;
+    }
+    // INT3 default escape behavior is a breakpoint exception when no user escape handles it.
+    if (opc == 0x00CC) {
+        raise_bp_ctx(ctx);
+        result_code = CPU_STEP_EXCEPTION;
+        goto cpu_step_finish;
+    }
+    // INT, IN, OUT, SYSCALL and SYSENTER are escape-owned and default to #UD here.
+    if (opc == 0x00CD ||
+        opc == 0x00E4 || opc == 0x00E5 || opc == 0x00E6 || opc == 0x00E7 ||
+        opc == 0x00EC || opc == 0x00ED || opc == 0x00EE || opc == 0x00EF ||
+        opc == 0x0F05 || opc == 0x0F34) {
+        raise_ud_ctx(ctx);
         result_code = CPU_STEP_UD;
         goto cpu_step_finish;
     }
@@ -200,6 +300,13 @@ int cpu_step(CPU_CONTEXT* ctx) {
         branch = (ff_reg == 2 || ff_reg == 3 || ff_reg == 4 || ff_reg == 5);
     }
 
+    cpu_capture_scalar_snapshot(&saved_scalar, ctx);
+    scalar_snapshot_valid = true;
+    if (cpu_step_may_touch_vector_state(buf, fetched, prefix_len, opc, mandatory_prefix)) {
+        cpu_capture_vector_snapshot(&saved_vector, ctx);
+        vector_snapshot_valid = true;
+    }
+
     // -----------------------------------------------------------------------
     // Dispatch
     // -----------------------------------------------------------------------
@@ -211,7 +318,7 @@ int cpu_step(CPU_CONTEXT* ctx) {
         goto cpu_step_finish;
     }
     if (opc == 0x00C2) {
-        if (fetched < prefix_len + 3) { raise_gp(0); }
+        if (fetched < prefix_len + 3) { raise_gp_ctx(ctx, 0); }
         if (cpu_has_exception(ctx)) {
             goto cpu_step_finish;
         }
@@ -386,7 +493,7 @@ int cpu_step(CPU_CONTEXT* ctx) {
         execute_bswap(ctx, buf, (size_t)fetched);
     }
     else if (opc == 0x0F31) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         result_code = CPU_STEP_UD;
         goto cpu_step_finish;
     }
@@ -402,12 +509,12 @@ int cpu_step(CPU_CONTEXT* ctx) {
     else if (opc == 0x0FC7 && (prefix_len + 2) < fetched) {
         const uint8_t modrm = buf[prefix_len + 2];
         if ((((modrm >> 3) & 0x07) == 7) && (((modrm >> 6) & 0x03) == 3)) {
-            raise_ud();
+            raise_ud_ctx(ctx);
             result_code = CPU_STEP_UD;
             goto cpu_step_finish;
         }
         if (is_rdrand_instruction(buf, (size_t)fetched)) {
-            raise_ud();
+            raise_ud_ctx(ctx);
             result_code = CPU_STEP_UD;
             goto cpu_step_finish;
         }
@@ -415,7 +522,7 @@ int cpu_step(CPU_CONTEXT* ctx) {
     }
     else if (opc == 0x0FC7) {
         if (is_rdrand_instruction(buf, (size_t)fetched)) {
-            raise_ud();
+            raise_ud_ctx(ctx);
             result_code = CPU_STEP_UD;
             goto cpu_step_finish;
         }
@@ -446,23 +553,23 @@ int cpu_step(CPU_CONTEXT* ctx) {
             execute_pcmpistri(ctx, buf, (size_t)fetched);
         }
         else {
-            raise_ud();
+            raise_ud_ctx(ctx);
             result_code = CPU_STEP_UD;
             goto cpu_step_finish;
         }
     }
     else if (opc == 0x0FA2) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         result_code = CPU_STEP_UD;
         goto cpu_step_finish;
     }
     else if (is_xgetbv) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         result_code = CPU_STEP_UD;
         goto cpu_step_finish;
     }
     else if (is_rdtscp) {
-        raise_ud();
+        raise_ud_ctx(ctx);
         result_code = CPU_STEP_UD;
         goto cpu_step_finish;
     }
@@ -476,7 +583,7 @@ int cpu_step(CPU_CONTEXT* ctx) {
         const uint8_t opcode3 = buf[prefix_len + 2];
         const uint8_t reg = (uint8_t)((opcode3 >> 3) & 0x07);
         if (opcode3 == 0xFA || opcode3 == 0xFB || reg == 1) {
-            raise_ud();
+            raise_ud_ctx(ctx);
             result_code = CPU_STEP_UD;
             goto cpu_step_finish;
         }
@@ -520,9 +627,14 @@ int cpu_step(CPU_CONTEXT* ctx) {
     else if (raw_opc == 0x8D) {
         execute_lea(ctx, buf, (size_t)fetched);
     }
+    // MOV CRx is escape-owned and defaults to #UD when no user escape handles it.
+    else if (opc == 0x0F20 || opc == 0x0F22) {
+        raise_ud_ctx(ctx);
+        result_code = CPU_STEP_UD;
+        goto cpu_step_finish;
+    }
     // MOV: 88-8C, 8E, 0F20, 0F22, A0-A3, B0-BF, C6, C7
     else if (((raw_opc >= 0x88 && raw_opc <= 0x8C) || raw_opc == 0x8E) ||
-        opc == 0x0F20 || opc == 0x0F22 ||
         (raw_opc >= 0xA0 && raw_opc <= 0xA3) ||
         (raw_opc >= 0xB0 && raw_opc <= 0xBF) ||
         raw_opc == 0xC6 || raw_opc == 0xC7)
@@ -643,7 +755,7 @@ int cpu_step(CPU_CONTEXT* ctx) {
         case 5: execute_sub(ctx, buf, (size_t)fetched); break; // SUB
         case 6: execute_xor(ctx, buf, (size_t)fetched); break; // XOR
         case 7: execute_cmp(ctx, buf, (size_t)fetched); break; // CMP
-        default: raise_ud(); result_code = CPU_STEP_UD; goto cpu_step_finish;
+        default: raise_ud_ctx(ctx); result_code = CPU_STEP_UD; goto cpu_step_finish;
         }
     }
     // ROL: D0-D3/0, C0/0, C1/0
@@ -744,11 +856,11 @@ int cpu_step(CPU_CONTEXT* ctx) {
         case 2: case 3: execute_call(ctx, buf, (size_t)fetched); break;
         case 4: case 5: execute_jmp(ctx, buf, (size_t)fetched); break;
         case 6:         execute_push(ctx, buf, (size_t)fetched); break;
-        default: raise_ud(); result_code = CPU_STEP_UD; goto cpu_step_finish;
+        default: raise_ud_ctx(ctx); result_code = CPU_STEP_UD; goto cpu_step_finish;
         }
     }
     else {
-        raise_ud();
+        raise_ud_ctx(ctx);
         result_code = CPU_STEP_UD;
         goto cpu_step_finish;
     }
@@ -762,14 +874,21 @@ int cpu_step(CPU_CONTEXT* ctx) {
 cpu_step_finish:
     if (cpu_has_exception(ctx)) {
         CPU_EXCEPTION_STATE exception_state = ctx->exception;
-        *ctx = saved_ctx;
+        if (scalar_snapshot_valid) {
+            cpu_restore_scalar_snapshot(ctx, &saved_scalar);
+            if (vector_snapshot_valid) {
+                cpu_restore_vector_snapshot(ctx, &saved_vector);
+            }
+        }
         ctx->exception = exception_state;
-        cpu_set_active_context(previous_active_ctx);
         return CPU_STEP_EXCEPTION;
     }
 
-    cpu_set_active_context(previous_active_ctx);
     return result_code;
+}
+
+int cpu_step(CPU_CONTEXT* ctx) {
+    return cpu_step_with_prefetch(ctx, NULL, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -782,7 +901,7 @@ uint64_t cpu_run(CPU_CONTEXT* ctx, uint64_t max_steps) {
     uint64_t count = 0;
     for (;;) {
         if (max_steps != 0 && count >= max_steps) break;
-        int result = cpu_step(ctx);
+        int result = cpu_step_with_prefetch(ctx, NULL, 0);
         if (result == CPU_STEP_HALT) break;
         if (result != CPU_STEP_OK)  break;
         count++;

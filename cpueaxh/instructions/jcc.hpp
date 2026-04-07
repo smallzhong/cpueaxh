@@ -141,7 +141,7 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         }
         else if (prefix == 0xF0) {
             // LOCK prefix is #UD for Jcc
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
             prefix == 0x64 || prefix == 0x65 || prefix == 0xF2 || prefix == 0xF3) {
@@ -153,7 +153,7 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     // In 64-bit mode: operand size fixed at 64; rel8/rel32 sign-extended to 64 bits
@@ -187,7 +187,7 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     if (opcode == 0xE3) {
         // JRCXZ / JECXZ / JCXZ - test CX/ECX/RCX == 0
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         int8_t rel8 = (int8_t)code[offset++];
         ctx->last_inst_size = (int)offset;
@@ -199,7 +199,7 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     if (opcode >= 0x70 && opcode <= 0x7F) {
         // Short Jcc: rel8
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         int8_t rel8 = (int8_t)code[offset++];
         uint8_t cond = opcode & 0x0F;
@@ -212,11 +212,11 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     if (opcode == 0x0F) {
         // Near Jcc: 0x0F 0x80-0x8F
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         uint8_t opcode2 = code[offset++];
         if (opcode2 < 0x80 || opcode2 > 0x8F) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         uint8_t cond = opcode2 & 0x0F;
 
@@ -225,7 +225,7 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         if (ctx->cs.descriptor.long_mode) {
             // rel16 not supported in 64-bit mode; always rel32
             if (operand_size_override) {
-                raise_ud();
+                raise_ud_ctx(ctx);
             }
             imm_size = 4;
         }
@@ -234,7 +234,7 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         }
 
         if (offset + imm_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         int32_t rel = 0;
@@ -252,5 +252,5 @@ void execute_jcc(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         return;
     }
 
-    raise_ud();
+    raise_ud_ctx(ctx);
 }

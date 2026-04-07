@@ -26,7 +26,7 @@ uint64_t read_xchg_reg_operand(CPU_CONTEXT* ctx, int reg_index, int operand_size
     case 16: return get_reg16(ctx, reg_index);
     case 32: return get_reg32(ctx, reg_index);
     case 64: return get_reg64(ctx, reg_index);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 void write_xchg_reg_operand(CPU_CONTEXT* ctx, int reg_index, int operand_size, uint64_t value) {
@@ -35,7 +35,7 @@ void write_xchg_reg_operand(CPU_CONTEXT* ctx, int reg_index, int operand_size, u
     case 16: set_reg16(ctx, reg_index, (uint16_t)value); break;
     case 32: set_reg32(ctx, reg_index, (uint32_t)value); break;
     case 64: set_reg64(ctx, reg_index, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 uint64_t read_xchg_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int operand_size) {
@@ -49,7 +49,7 @@ uint64_t read_xchg_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 void write_xchg_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int operand_size, uint64_t value) {
@@ -64,7 +64,7 @@ void write_xchg_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, i
     case 16: write_memory_word(ctx, mem_addr, (uint16_t)value); break;
     case 32: write_memory_dword(ctx, mem_addr, (uint32_t)value); break;
     case 64: write_memory_qword(ctx, mem_addr, value); break;
-    default: raise_ud();
+    default: raise_ud_ctx(ctx);
     }
 }
 void xchg_rm_reg(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int operand_size) {
@@ -96,7 +96,7 @@ void xchg_acc_reg(CPU_CONTEXT* ctx, uint8_t opcode, int operand_size) {
 }
 void decode_modrm_xchg(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst->has_modrm = true;
     inst->modrm = code[(*offset)++];
@@ -104,7 +104,7 @@ void decode_modrm_xchg(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
     uint8_t rm = inst->modrm & 0x07;
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -123,7 +123,7 @@ void decode_modrm_xchg(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
     }
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->displacement = 0;
         for (int index = 0; index < inst->disp_size; index++) {
@@ -140,7 +140,7 @@ void decode_modrm_xchg(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
         inst->mem_address = get_effective_address(ctx, inst->modrm, &inst->sib, &inst->displacement, inst->address_size);
     }
     if (has_lock_prefix && mod == 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 DecodedInstruction decode_xchg_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
@@ -185,7 +185,7 @@ DecodedInstruction decode_xchg_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         }
     }
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
     inst.opcode = code[offset++];
     inst.operand_size = 32;
@@ -219,11 +219,11 @@ DecodedInstruction decode_xchg_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     case 0x96:
     case 0x97:
         if (has_lock_prefix) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
     inst.inst_size = (int)offset;
     finalize_rip_relative_address(ctx, &inst, (int)offset);
@@ -248,6 +248,6 @@ void execute_xchg(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         xchg_acc_reg(ctx, inst.opcode, inst.operand_size);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }

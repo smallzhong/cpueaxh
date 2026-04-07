@@ -1,4 +1,4 @@
-﻿// instrusments/movsxd.hpp - MOVSXD instruction implementation
+// instrusments/movsxd.hpp - MOVSXD instruction implementation
 
 int decode_movsxd_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
     int rm = modrm & 0x07;
@@ -41,7 +41,7 @@ void movsxd_r64_rm32(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp,
 
 void decode_modrm_movsxd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -52,7 +52,7 @@ void decode_modrm_movsxd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* co
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -73,7 +73,7 @@ void decode_modrm_movsxd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* co
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -94,7 +94,7 @@ void decode_modrm_movsxd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* co
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -144,20 +144,20 @@ DecodedInstruction decode_movsxd_instruction(CPU_CONTEXT* ctx, uint8_t* code, si
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x63) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (!ctx->cs.descriptor.long_mode) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (!ctx->rex_w || ctx->operand_size_override) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = 64;

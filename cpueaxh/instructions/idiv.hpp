@@ -20,7 +20,7 @@ uint64_t read_idiv_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -29,7 +29,7 @@ uint64_t read_idiv_rm_operand(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr
     case 16: return read_memory_word(ctx, mem_addr);
     case 32: return read_memory_dword(ctx, mem_addr);
     case 64: return read_memory_qword(ctx, mem_addr);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -67,7 +67,7 @@ void idiv_rm8(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64
 
     uint8_t divisor_bits = (uint8_t)read_idiv_rm_operand(ctx, modrm, mem_addr, 8);
     if (divisor_bits == 0) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     uint16_t dividend_bits = get_reg16(ctx, REG_RAX);
@@ -82,7 +82,7 @@ void idiv_rm8(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint64
     bool quotient_negative = dividend_negative ^ divisor_negative;
 
     if (idiv_quotient_overflows(abs_quotient, quotient_negative, 8)) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     uint8_t quotient_bits = (uint8_t)pack_signed_value(abs_quotient, quotient_negative, 8);
@@ -97,7 +97,7 @@ void idiv_rm16(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
 
     uint16_t divisor_bits = (uint16_t)read_idiv_rm_operand(ctx, modrm, mem_addr, 16);
     if (divisor_bits == 0) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     uint32_t dividend_bits = ((uint32_t)get_reg16(ctx, REG_RDX) << 16) | (uint32_t)get_reg16(ctx, REG_RAX);
@@ -112,7 +112,7 @@ void idiv_rm16(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
     bool quotient_negative = dividend_negative ^ divisor_negative;
 
     if (idiv_quotient_overflows(abs_quotient, quotient_negative, 16)) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     set_reg16(ctx, REG_RAX, (uint16_t)pack_signed_value(abs_quotient, quotient_negative, 16));
@@ -126,7 +126,7 @@ void idiv_rm32(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
 
     uint32_t divisor_bits = (uint32_t)read_idiv_rm_operand(ctx, modrm, mem_addr, 32);
     if (divisor_bits == 0) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     uint64_t dividend_bits = ((uint64_t)get_reg32(ctx, REG_RDX) << 32) | (uint64_t)get_reg32(ctx, REG_RAX);
@@ -141,7 +141,7 @@ void idiv_rm32(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
     bool quotient_negative = dividend_negative ^ divisor_negative;
 
     if (idiv_quotient_overflows(abs_quotient, quotient_negative, 32)) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     set_reg32(ctx, REG_RAX, (uint32_t)pack_signed_value(abs_quotient, quotient_negative, 32));
@@ -155,7 +155,7 @@ void idiv_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
 
     uint64_t divisor_bits = read_idiv_rm_operand(ctx, modrm, mem_addr, 64);
     if (divisor_bits == 0) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     uint64_t dividend_low = get_reg64(ctx, REG_RAX);
@@ -171,7 +171,7 @@ void idiv_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
 
     uint64_t abs_divisor = divisor_negative ? (~divisor_bits + 1ULL) : divisor_bits;
     if (abs_dividend_high >= abs_divisor) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     uint64_t abs_remainder = 0;
@@ -179,7 +179,7 @@ void idiv_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
     bool quotient_negative = dividend_negative ^ divisor_negative;
 
     if (idiv_quotient_overflows(abs_quotient, quotient_negative, 64)) {
-        raise_de();
+        raise_de_ctx(ctx);
     }
 
     set_reg64(ctx, REG_RAX, pack_signed_value(abs_quotient, quotient_negative, 64));
@@ -190,7 +190,7 @@ void idiv_rm64(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t sib, int32_t disp, uint6
 
 void decode_modrm_idiv(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -201,7 +201,7 @@ void decode_modrm_idiv(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -222,7 +222,7 @@ void decode_modrm_idiv(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -243,7 +243,7 @@ void decode_modrm_idiv(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -295,7 +295,7 @@ DecodedInstruction decode_idiv_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
@@ -319,19 +319,19 @@ DecodedInstruction decode_idiv_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
         inst.operand_size = 8;
         decode_modrm_idiv(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 7) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     case 0xF7:
         decode_modrm_idiv(ctx, &inst, code, code_size, &offset, has_lock_prefix);
         if (((inst.modrm >> 3) & 0x07) != 7) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         break;
 
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     finalize_rip_relative_address(ctx, &inst, (int)offset);

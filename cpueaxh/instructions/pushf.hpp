@@ -16,7 +16,7 @@ uint64_t get_pushf_image(CPU_CONTEXT* ctx, int operand_size) {
     case 16: return (uint16_t)flags;
     case 32: return (uint32_t)flags;
     case 64: return flags;
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -32,7 +32,7 @@ void pushf_value(CPU_CONTEXT* ctx, int operand_size, uint64_t value) {
         push_value64(ctx, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -41,7 +41,7 @@ uint64_t popf_value(CPU_CONTEXT* ctx, int operand_size) {
     case 16: return pop_value16(ctx);
     case 32: return pop_value32(ctx);
     case 64: return pop_value64(ctx);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -57,7 +57,7 @@ void write_popf_flags(CPU_CONTEXT* ctx, int operand_size, uint64_t value) {
         ctx->rflags = value;
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -107,16 +107,16 @@ DecodedInstruction decode_pushf_instruction(CPU_CONTEXT* ctx, uint8_t* code, siz
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x9C && inst.opcode != 0x9D) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = decode_pushf_operand_size(ctx);

@@ -18,7 +18,7 @@ int decode_sse_arith_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t*
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t*
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,7 +71,7 @@ void decode_modrm_sse_arith(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t*
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -128,24 +128,24 @@ DecodedInstruction decode_sse_arith_instruction(CPU_CONTEXT* ctx, uint8_t* code,
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x58 && inst.opcode != 0x59 && inst.opcode != 0x5C && inst.opcode != 0x5E) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix || *mandatory_prefix == 0x66 || *mandatory_prefix == 0xF2) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (*mandatory_prefix != 0 && *mandatory_prefix != 0xF3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -201,13 +201,13 @@ uint32_t sse_float_to_bits(float value) {
     return bits;
 }
 
-float apply_sse_arith_scalar(uint8_t opcode, float lhs, float rhs) {
+float apply_sse_arith_scalar(CPU_CONTEXT* ctx, uint8_t opcode, float lhs, float rhs) {
     switch (opcode) {
     case 0x58: return lhs + rhs;
     case 0x59: return lhs * rhs;
     case 0x5C: return lhs - rhs;
     case 0x5E: return lhs / rhs;
-    default: raise_ud(); return 0.0f;
+    default: raise_ud_ctx(ctx); return 0.0f;
     }
 }
 
@@ -231,7 +231,7 @@ void execute_sse_arith(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     if (mandatory_prefix == 0xF3) {
         float lhs0 = sse_bits_to_float(get_xmm_lane_bits(lhs, 0));
         float rhs0 = sse_bits_to_float(get_xmm_lane_bits(rhs, 0));
-        set_xmm_lane_bits(&result, 0, sse_float_to_bits(apply_sse_arith_scalar(inst.opcode, lhs0, rhs0)));
+        set_xmm_lane_bits(&result, 0, sse_float_to_bits(apply_sse_arith_scalar(ctx, inst.opcode, lhs0, rhs0)));
         set_xmm128(ctx, dest, result);
         return;
     }
@@ -239,7 +239,7 @@ void execute_sse_arith(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     for (int lane = 0; lane < 4; lane++) {
         float lhs_lane = sse_bits_to_float(get_xmm_lane_bits(lhs, lane));
         float rhs_lane = sse_bits_to_float(get_xmm_lane_bits(rhs, lane));
-        set_xmm_lane_bits(&result, lane, sse_float_to_bits(apply_sse_arith_scalar(inst.opcode, lhs_lane, rhs_lane)));
+        set_xmm_lane_bits(&result, lane, sse_float_to_bits(apply_sse_arith_scalar(ctx, inst.opcode, lhs_lane, rhs_lane)));
     }
 
     set_xmm128(ctx, dest, result);

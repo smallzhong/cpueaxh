@@ -2,7 +2,7 @@
 
 static void decode_sse_state_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -13,7 +13,7 @@ static void decode_sse_state_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, u
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -34,7 +34,7 @@ static void decode_sse_state_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, u
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -101,20 +101,20 @@ DecodedInstruction decode_sse_state_instruction(CPU_CONTEXT* ctx, uint8_t* code,
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xAE) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_lock_prefix || has_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -130,26 +130,26 @@ DecodedInstruction decode_sse_state_instruction(CPU_CONTEXT* ctx, uint8_t* code,
     uint8_t reg = (inst.modrm >> 3) & 0x07;
     if (reg <= 3) {
         if (mod == 3) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
     }
     else if (reg == 5) {
         if (inst.modrm != 0xE8) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
     }
     else if (reg == 6) {
         if (inst.modrm != 0xF0) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
     }
     else if (reg == 7) {
         if (mod == 3 && inst.modrm != 0xF8) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
     }
     else {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.inst_size = (int)offset;
@@ -158,20 +158,20 @@ DecodedInstruction decode_sse_state_instruction(CPU_CONTEXT* ctx, uint8_t* code,
     return inst;
 }
 
-static void sse_state_validate_mxcsr(uint32_t value) {
+static void sse_state_validate_mxcsr(CPU_CONTEXT* ctx, uint32_t value) {
     if ((value & 0xFFFF0000U) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
-static void sse_state_validate_fx_area(uint64_t address) {
+static void sse_state_validate_fx_area(CPU_CONTEXT* ctx, uint64_t address) {
     if ((address & 0x0FULL) != 0) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 }
 
 static void sse_state_write_fxsave(CPU_CONTEXT* ctx, uint64_t address) {
-    sse_state_validate_fx_area(address);
+    sse_state_validate_fx_area(ctx, address);
     if (cpu_has_exception(ctx)) {
         return;
     }
@@ -198,7 +198,7 @@ static void sse_state_write_fxsave(CPU_CONTEXT* ctx, uint64_t address) {
 }
 
 static void sse_state_read_fxrstor(CPU_CONTEXT* ctx, uint64_t address) {
-    sse_state_validate_fx_area(address);
+    sse_state_validate_fx_area(ctx, address);
     if (cpu_has_exception(ctx)) {
         return;
     }
@@ -207,7 +207,7 @@ static void sse_state_read_fxrstor(CPU_CONTEXT* ctx, uint64_t address) {
     if (cpu_has_exception(ctx)) {
         return;
     }
-    sse_state_validate_mxcsr(Mxcsr);
+    sse_state_validate_mxcsr(ctx, Mxcsr);
     if (cpu_has_exception(ctx)) {
         return;
     }
@@ -244,7 +244,7 @@ void execute_sse_state(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
 
     if (reg == 2) {
         uint32_t value = read_memory_dword(ctx, inst.mem_address);
-        sse_state_validate_mxcsr(value);
+        sse_state_validate_mxcsr(ctx, value);
         ctx->mxcsr = value & 0x0000FFFFU;
         return;
     }
@@ -262,5 +262,5 @@ void execute_sse_state(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         return;
     }
 
-    raise_ud();
+    raise_ud_ctx(ctx);
 }

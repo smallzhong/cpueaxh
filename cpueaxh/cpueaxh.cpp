@@ -44,6 +44,8 @@ struct cpueaxh_engine {
     MEMORY_MANAGER memory_manager;
     CPU_CONTEXT context;
     CPUEAXH_HOOK_ENTRY hooks[CPUEAXH_MAX_HOOKS];
+    uint16_t hook_type_counts[CPUEAXH_HOOK_MEM_FETCH_PROT + 1];
+    uint8_t escape_index_by_id[CPUEAXH_ESCAPE_INSN_RDSSPQ + 1];
     CPUEAXH_ESCAPE_ENTRY* escapes;
     size_t escape_count;
     size_t escape_capacity;
@@ -358,8 +360,72 @@ static bool cpueaxh_is_invalid_memory_hook_type(uint32_t type) {
         type == CPUEAXH_HOOK_MEM_READ_PROT || type == CPUEAXH_HOOK_MEM_WRITE_PROT || type == CPUEAXH_HOOK_MEM_FETCH_PROT;
 }
 
+static bool cpueaxh_is_hook_type_index_valid(uint32_t type) {
+    return type <= CPUEAXH_HOOK_MEM_FETCH_PROT;
+}
+
+static bool cpueaxh_is_escape_index_valid(cpueaxh_escape_insn_id instruction_id) {
+    return instruction_id > CPUEAXH_ESCAPE_INSN_NONE && instruction_id <= CPUEAXH_ESCAPE_INSN_RDSSPQ;
+}
+
+static void cpueaxh_rebuild_escape_index(cpueaxh_engine* engine) {
+    if (!engine) {
+        return;
+    }
+
+    CPUEAXH_MEMSET(engine->escape_index_by_id, 0, sizeof(engine->escape_index_by_id));
+    for (size_t index = 0; index < engine->escape_count; index++) {
+        const cpueaxh_escape_insn_id instruction_id = engine->escapes[index].instruction_id;
+        if (cpueaxh_is_escape_index_valid(instruction_id) && index < 0xFF) {
+            engine->escape_index_by_id[instruction_id] = (uint8_t)(index + 1);
+        }
+    }
+}
+
+static CPUEAXH_ESCAPE_ENTRY* cpueaxh_lookup_escape_entry(cpueaxh_engine* engine, cpueaxh_escape_insn_id instruction_id) {
+    if (!engine || !cpueaxh_is_escape_index_valid(instruction_id)) {
+        return NULL;
+    }
+
+    const uint8_t encoded_index = engine->escape_index_by_id[instruction_id];
+    if (encoded_index == 0) {
+        return NULL;
+    }
+
+    const size_t index = (size_t)(encoded_index - 1);
+    if (index >= engine->escape_count) {
+        return NULL;
+    }
+
+    CPUEAXH_ESCAPE_ENTRY* escape = &engine->escapes[index];
+    return escape->instruction_id == instruction_id ? escape : NULL;
+}
+
+static void cpueaxh_adjust_hook_type_count(cpueaxh_engine* engine, uint32_t type, int delta) {
+    if (!engine || !cpueaxh_is_hook_type_index_valid(type) || delta == 0) {
+        return;
+    }
+
+    uint16_t& count = engine->hook_type_counts[type];
+    if (delta > 0) {
+        count = (uint16_t)(count + (uint16_t)delta);
+    }
+    else {
+        const uint16_t amount = (uint16_t)(-delta);
+        count = count > amount ? (uint16_t)(count - amount) : 0;
+    }
+}
+
+bool cpu_has_hook_type(const CPU_CONTEXT* ctx, uint32_t type) {
+    if (!ctx || !ctx->owner_engine || !cpueaxh_is_hook_type_index_valid(type)) {
+        return false;
+    }
+
+    return ctx->owner_engine->hook_type_counts[type] != 0;
+}
+
 void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value) {
-    if (!ctx || !ctx->owner_engine) {
+    if (!cpu_has_hook_type(ctx, type)) {
         return;
     }
 
@@ -379,7 +445,7 @@ void cpu_notify_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, s
 }
 
 bool cpu_notify_invalid_memory_hook(CPU_CONTEXT* ctx, uint32_t type, uint64_t address, size_t size, uint64_t value) {
-    if (!ctx || !ctx->owner_engine) {
+    if (!cpu_has_hook_type(ctx, type)) {
         return false;
     }
 
@@ -826,6 +892,10 @@ static bool cpueaxh_is_optional_escape_instruction(cpueaxh_escape_insn_id instru
 }
 
 static void cpueaxh_dispatch_code_hooks(cpueaxh_engine* engine, uint32_t type, uint64_t address) {
+    if (!engine || !cpueaxh_is_hook_type_index_valid(type) || engine->hook_type_counts[type] == 0) {
+        return;
+    }
+
     for (int index = 0; index < CPUEAXH_MAX_HOOKS; index++) {
         CPUEAXH_HOOK_ENTRY* hook = &engine->hooks[index];
         if (!hook->used || hook->type != type || !hook->code_callback) {
@@ -840,14 +910,8 @@ static void cpueaxh_dispatch_code_hooks(cpueaxh_engine* engine, uint32_t type, u
     }
 }
 
-static bool cpueaxh_try_dispatch_escape(cpueaxh_engine* engine, uint64_t address, uint32_t* escaped_size, cpueaxh_err* callback_error, CPUEAXH_HOST_BRIDGE_BLOCK* bridge_block) {
-    if (!engine || !escaped_size || !callback_error) {
-        return false;
-    }
-
-    uint8_t bytes[MAX_INST_FETCH] = {};
-    int fetched = fetch_instruction_bytes(&engine->context, address, bytes);
-    if (fetched <= 0 || cpu_has_exception(&engine->context)) {
+static bool cpueaxh_try_dispatch_escape(cpueaxh_engine* engine, uint64_t address, uint8_t* bytes, int fetched, uint32_t* escaped_size, cpueaxh_err* callback_error, CPUEAXH_HOST_BRIDGE_BLOCK* bridge_block) {
+    if (!engine || !bytes || fetched <= 0 || !escaped_size || !callback_error) {
         return false;
     }
 
@@ -857,15 +921,8 @@ static bool cpueaxh_try_dispatch_escape(cpueaxh_engine* engine, uint64_t address
         return false;
     }
 
-    for (size_t index = 0; index < engine->escape_count; index++) {
-        CPUEAXH_ESCAPE_ENTRY* escape = &engine->escapes[index];
-        if (!escape->callback || escape->instruction_id != instruction_id) {
-            continue;
-        }
-        if (!cpueaxh_range_contains(escape->begin, escape->end, address)) {
-            continue;
-        }
-
+    CPUEAXH_ESCAPE_ENTRY* escape = cpueaxh_lookup_escape_entry(engine, instruction_id);
+    if (escape && escape->callback && cpueaxh_range_contains(escape->begin, escape->end, address)) {
         cpueaxh_x86_context context = {};
         uint64_t rip_before = engine->context.rip;
         cpueaxh_context_out(&context, &engine->context);
@@ -1219,8 +1276,49 @@ extern "C" cpueaxh_err cpueaxh_emu_start(cpueaxh_engine* engine, uint64_t begin,
     engine->stop_requested = 0;
     cpu_clear_exception(&engine->context);
     CPUEAXH_HOST_BRIDGE_BLOCK host_bridge_block = {};
+    cpueaxh_err result = CPUEAXH_ERR_OK;
+    const bool has_registered_escapes = engine->escape_count != 0;
+    bool has_any_hook = false;
+    for (uint32_t hook_type = CPUEAXH_HOOK_CODE_PRE; hook_type <= CPUEAXH_HOOK_MEM_FETCH_PROT; hook_type++) {
+        if (engine->hook_type_counts[hook_type] != 0) {
+            has_any_hook = true;
+            break;
+        }
+    }
 
     size_t executed = 0;
+    if (!has_any_hook && !has_registered_escapes) {
+        for (;;) {
+            if (count != 0 && executed >= count) {
+                break;
+            }
+            if (until != 0 && engine->context.rip == until) {
+                break;
+            }
+            if (engine->stop_requested) {
+                break;
+            }
+
+            int status = cpu_step(&engine->context);
+            if (status == CPU_STEP_OK) {
+                executed++;
+                continue;
+            }
+            if (status == CPU_STEP_HALT) {
+                engine->last_error = CPUEAXH_ERR_OK;
+                goto cpueaxh_emu_start_finish;
+            }
+
+            error = cpueaxh_translate_step_error(engine, status);
+            engine->last_error = error;
+            result = error;
+            goto cpueaxh_emu_start_finish;
+        }
+
+        engine->last_error = CPUEAXH_ERR_OK;
+        goto cpueaxh_emu_start_finish;
+    }
+
     for (;;) {
         if (count != 0 && executed >= count) {
             break;
@@ -1233,41 +1331,56 @@ extern "C" cpueaxh_err cpueaxh_emu_start(cpueaxh_engine* engine, uint64_t begin,
         }
 
         uint64_t address = engine->context.rip;
-        cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_PRE, address);
+        if (engine->hook_type_counts[CPUEAXH_HOOK_CODE_PRE] != 0) {
+            cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_PRE, address);
+        }
         if (engine->stop_requested) {
             break;
         }
 
+        uint8_t bytes[MAX_INST_FETCH];
+        int fetched = fetch_instruction_bytes(&engine->context, address, bytes);
+
         uint32_t escaped_size = 0;
-        if (cpueaxh_try_dispatch_escape(engine, address, &escaped_size, &error, &host_bridge_block)) {
+        if (cpueaxh_try_dispatch_escape(engine, address, bytes, fetched, &escaped_size, &error, &host_bridge_block)) {
             if (error != CPUEAXH_ERR_OK) {
                 engine->last_error = error;
-                return error;
+                result = error;
+                goto cpueaxh_emu_start_finish;
             }
 
             executed++;
-            cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_POST, address);
+            if (engine->hook_type_counts[CPUEAXH_HOOK_CODE_POST] != 0) {
+                cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_POST, address);
+            }
             continue;
         }
 
-        int status = cpu_step(&engine->context);
+        int status = cpu_step_with_prefetch(&engine->context, bytes, fetched);
         if (status == CPU_STEP_OK) {
             executed++;
-            cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_POST, address);
+            if (engine->hook_type_counts[CPUEAXH_HOOK_CODE_POST] != 0) {
+                cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_POST, address);
+            }
             continue;
         }
         if (status == CPU_STEP_HALT) {
-            cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_POST, address);
-            return CPUEAXH_ERR_OK;
+            if (engine->hook_type_counts[CPUEAXH_HOOK_CODE_POST] != 0) {
+                cpueaxh_dispatch_code_hooks(engine, CPUEAXH_HOOK_CODE_POST, address);
+            }
+            engine->last_error = CPUEAXH_ERR_OK;
+            goto cpueaxh_emu_start_finish;
         }
 
         error = cpueaxh_translate_step_error(engine, status);
         engine->last_error = error;
-        return error;
+        result = error;
+        goto cpueaxh_emu_start_finish;
     }
 
     engine->last_error = CPUEAXH_ERR_OK;
-    return CPUEAXH_ERR_OK;
+cpueaxh_emu_start_finish:
+    return result;
 }
 
 extern "C" cpueaxh_err cpueaxh_emu_start_function(cpueaxh_engine* engine, uint64_t begin, uint64_t timeout, size_t count) {
@@ -1375,6 +1488,7 @@ extern "C" cpueaxh_err cpueaxh_hook_add(cpueaxh_engine* engine, cpueaxh_hook* ou
         engine->hooks[index].user_data = user_data;
         engine->hooks[index].begin = begin;
         engine->hooks[index].end = end;
+        cpueaxh_adjust_hook_type_count(engine, type, 1);
         *out_hook = engine->hooks[index].handle;
         return CPUEAXH_ERR_OK;
     }
@@ -1394,6 +1508,7 @@ extern "C" cpueaxh_err cpueaxh_hook_del(cpueaxh_engine* engine, cpueaxh_hook hoo
 
     for (int index = 0; index < CPUEAXH_MAX_HOOKS; index++) {
         if (engine->hooks[index].used && engine->hooks[index].handle == hook) {
+            cpueaxh_adjust_hook_type_count(engine, engine->hooks[index].type, -1);
             CPUEAXH_MEMSET(&engine->hooks[index], 0, sizeof(engine->hooks[index]));
             return CPUEAXH_ERR_OK;
         }
@@ -1411,6 +1526,7 @@ extern "C" cpueaxh_err cpueaxh_hook_del(cpueaxh_engine* engine, cpueaxh_hook hoo
             if (engine->escape_count < engine->escape_capacity) {
                 CPUEAXH_MEMSET(&engine->escapes[engine->escape_count], 0, sizeof(engine->escapes[engine->escape_count]));
             }
+            cpueaxh_rebuild_escape_index(engine);
             return CPUEAXH_ERR_OK;
         }
     }
@@ -1424,10 +1540,8 @@ extern "C" cpueaxh_err cpueaxh_escape_add(cpueaxh_engine* engine, cpueaxh_escape
         return error != CPUEAXH_ERR_OK ? error : CPUEAXH_ERR_ARG;
     }
 
-    for (size_t index = 0; index < engine->escape_count; index++) {
-        if (engine->escapes[index].instruction_id == instruction_id) {
-            return CPUEAXH_ERR_HOOK;
-        }
+    if (cpueaxh_lookup_escape_entry(engine, instruction_id)) {
+        return CPUEAXH_ERR_HOOK;
     }
 
     error = cpueaxh_ensure_escape_capacity(engine, engine->escape_count + 1);
@@ -1442,6 +1556,7 @@ extern "C" cpueaxh_err cpueaxh_escape_add(cpueaxh_engine* engine, cpueaxh_escape
     escape->begin = begin;
     escape->end = end;
     escape->instruction_id = instruction_id;
+    cpueaxh_rebuild_escape_index(engine);
     *out_hook = escape->handle;
     return CPUEAXH_ERR_OK;
 }

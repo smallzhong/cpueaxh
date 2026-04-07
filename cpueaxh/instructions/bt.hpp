@@ -23,12 +23,12 @@ int decode_bt_reg_index(CPU_CONTEXT* ctx, uint8_t modrm) {
     return reg;
 }
 
-uint64_t get_bt_operand_mask(int operand_size) {
+uint64_t get_bt_operand_mask(CPU_CONTEXT* ctx, int operand_size) {
     switch (operand_size) {
     case 16: return 0xFFFFULL;
     case 32: return 0xFFFFFFFFULL;
     case 64: return 0xFFFFFFFFFFFFFFFFULL;
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -37,7 +37,7 @@ uint64_t read_bt_memory_value(CPU_CONTEXT* ctx, uint64_t address, int operand_si
     case 16: return read_memory_word(ctx, address);
     case 32: return read_memory_dword(ctx, address);
     case 64: return read_memory_qword(ctx, address);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -53,7 +53,7 @@ void write_bt_memory_value(CPU_CONTEXT* ctx, uint64_t address, int operand_size,
         write_memory_qword(ctx, address, value);
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -65,7 +65,7 @@ uint64_t read_bt_rm_value(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, in
         case 16: return get_reg16(ctx, rm);
         case 32: return get_reg32(ctx, rm);
         case 64: return get_reg64(ctx, rm);
-        default: raise_ud(); return 0;
+        default: raise_ud_ctx(ctx); return 0;
         }
     }
 
@@ -87,7 +87,7 @@ void write_bt_rm_value(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int o
             set_reg64(ctx, rm, value);
             break;
         default:
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
         return;
     }
@@ -95,12 +95,12 @@ void write_bt_rm_value(CPU_CONTEXT* ctx, uint8_t modrm, uint64_t mem_addr, int o
     write_bt_memory_value(ctx, mem_addr, operand_size, value);
 }
 
-int64_t sign_extend_bt_source(uint64_t value, int operand_size) {
+int64_t sign_extend_bt_source(CPU_CONTEXT* ctx, uint64_t value, int operand_size) {
     switch (operand_size) {
     case 16: return (int16_t)value;
     case 32: return (int32_t)value;
     case 64: return (int64_t)value;
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -120,7 +120,7 @@ uint64_t add_bt_signed_offset(uint64_t base, int64_t byte_offset) {
     return base - (uint64_t)(-byte_offset);
 }
 
-BitTestOperation decode_bt_operation(uint8_t opcode, uint8_t modrm) {
+BitTestOperation decode_bt_operation(CPU_CONTEXT* ctx, uint8_t opcode, uint8_t modrm) {
     switch (opcode) {
     case 0xA3:
         return BIT_TEST_OP_BT;
@@ -136,10 +136,10 @@ BitTestOperation decode_bt_operation(uint8_t opcode, uint8_t modrm) {
         case 5: return BIT_TEST_OP_BTS;
         case 6: return BIT_TEST_OP_BTR;
         case 7: return BIT_TEST_OP_BTC;
-        default: raise_ud(); return BIT_TEST_OP_BT;
+        default: raise_ud_ctx(ctx); return BIT_TEST_OP_BT;
         }
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
         return BIT_TEST_OP_BT;
     }
 }
@@ -157,7 +157,7 @@ uint64_t read_bt_source_register(CPU_CONTEXT* ctx, uint8_t modrm, int operand_si
     case 16: return get_reg16(ctx, reg);
     case 32: return get_reg32(ctx, reg);
     case 64: return get_reg64(ctx, reg);
-    default: raise_ud(); return 0;
+    default: raise_ud_ctx(ctx); return 0;
     }
 }
 
@@ -183,7 +183,7 @@ bool execute_locked_bt_memory(CPU_CONTEXT* ctx, BitTestOperation operation, uint
                 carry = (unsigned char)((_InterlockedXor((volatile long*)ptr, bit_mask) & bit_mask) != 0);
                 break;
             default:
-                raise_ud();
+                raise_ud_ctx(ctx);
                 return true;
             }
             set_flag(ctx, RFLAGS_CF, carry != 0);
@@ -203,7 +203,7 @@ bool execute_locked_bt_memory(CPU_CONTEXT* ctx, BitTestOperation operation, uint
                 carry = (unsigned char)((_InterlockedXor64((volatile __int64*)ptr, bit_mask) & bit_mask) != 0);
                 break;
             default:
-                raise_ud();
+                raise_ud_ctx(ctx);
                 return true;
             }
             set_flag(ctx, RFLAGS_CF, carry != 0);
@@ -214,7 +214,7 @@ bool execute_locked_bt_memory(CPU_CONTEXT* ctx, BitTestOperation operation, uint
         }
     }
 
-    uint64_t current_value = read_memory_operand(ctx, address, operand_size) & cpu_memory_operand_mask(operand_size);
+    uint64_t current_value = read_memory_operand(ctx, address, operand_size) & cpu_memory_operand_mask(ctx, operand_size);
     if (cpu_has_exception(ctx)) {
         return true;
     }
@@ -234,7 +234,7 @@ bool execute_locked_bt_memory(CPU_CONTEXT* ctx, BitTestOperation operation, uint
             new_value = current_value ^ (1ULL << bit_index);
             break;
         default:
-            raise_ud();
+            raise_ud_ctx(ctx);
             return true;
         }
 
@@ -243,7 +243,7 @@ bool execute_locked_bt_memory(CPU_CONTEXT* ctx, BitTestOperation operation, uint
             if (cpu_has_exception(ctx)) {
                 return true;
             }
-            current_value = observed_value & cpu_memory_operand_mask(operand_size);
+            current_value = observed_value & cpu_memory_operand_mask(ctx, operand_size);
             continue;
         }
 
@@ -253,10 +253,10 @@ bool execute_locked_bt_memory(CPU_CONTEXT* ctx, BitTestOperation operation, uint
 }
 
 void execute_bt_operation(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
-    BitTestOperation operation = decode_bt_operation(inst->opcode, inst->modrm);
+    BitTestOperation operation = decode_bt_operation(ctx, inst->opcode, inst->modrm);
     uint8_t mod = (inst->modrm >> 6) & 0x03;
     int operand_bits = inst->operand_size;
-    uint64_t operand_mask = get_bt_operand_mask(operand_bits);
+    uint64_t operand_mask = get_bt_operand_mask(ctx, operand_bits);
     unsigned int bit_index = 0;
     uint64_t target_value = 0;
     uint64_t target_address = inst->mem_address;
@@ -273,7 +273,7 @@ void execute_bt_operation(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
             bit_index = (unsigned int)((inst->immediate & 0xFFULL) & (uint64_t)(operand_bits - 1));
         }
         else {
-            int64_t source_index = sign_extend_bt_source(read_bt_source_register(ctx, inst->modrm, operand_bits), operand_bits);
+            int64_t source_index = sign_extend_bt_source(ctx, read_bt_source_register(ctx, inst->modrm, operand_bits), operand_bits);
             int64_t element_index = floor_div_bt_index(source_index, operand_bits);
             int64_t byte_offset = element_index * (operand_bits / 8);
             target_address = add_bt_signed_offset(inst->mem_address, byte_offset);
@@ -306,7 +306,7 @@ void execute_bt_operation(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
         result ^= bit_mask;
         break;
     default:
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     result &= operand_mask;
@@ -320,7 +320,7 @@ void execute_bt_operation(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
 
 void decode_modrm_bt(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -331,7 +331,7 @@ void decode_modrm_bt(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, 
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -352,7 +352,7 @@ void decode_modrm_bt(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, 
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -418,22 +418,22 @@ DecodedInstruction decode_bt_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xA3 && inst.opcode != 0xAB && inst.opcode != 0xB3 &&
         inst.opcode != 0xBB && inst.opcode != 0xBA) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.operand_size = 32;
@@ -456,19 +456,19 @@ DecodedInstruction decode_bt_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t
     if (inst.opcode == 0xBA) {
         uint8_t extension = (inst.modrm >> 3) & 0x07;
         if (extension < 4 || extension > 7) {
-            raise_ud();
+            raise_ud_ctx(ctx);
         }
 
         inst.imm_size = 1;
         if (offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst.immediate = code[offset++];
     }
 
-    BitTestOperation operation = decode_bt_operation(inst.opcode, inst.modrm);
+    BitTestOperation operation = decode_bt_operation(ctx, inst.opcode, inst.modrm);
     if (has_lock_prefix && !bt_operation_allows_lock(operation, inst.modrm)) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.has_lock_prefix = has_lock_prefix;

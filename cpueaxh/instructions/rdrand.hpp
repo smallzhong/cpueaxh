@@ -81,26 +81,26 @@ DecodedInstruction decode_rdrand_instruction(CPU_CONTEXT* ctx, const uint8_t* co
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (offset + 3 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0xC7) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.has_modrm = true;
     inst.modrm = code[offset++];
     if (((inst.modrm >> 3) & 0x07) != 6 || ((inst.modrm >> 6) & 0x03) != 3) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->rex_w) {
@@ -151,7 +151,7 @@ void execute_rdrand_register(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
         return;
     }
 
-    raise_ud();
+    raise_ud_ctx(ctx);
 }
 
 void execute_rdrand(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {

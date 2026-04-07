@@ -18,7 +18,7 @@ int decode_sse2_arith_pd_xmm_rm_index(CPU_CONTEXT* ctx, uint8_t modrm) {
 
 void decode_modrm_sse2_arith_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset, bool has_lock_prefix) {
     if (*offset >= code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     inst->has_modrm = true;
@@ -29,7 +29,7 @@ void decode_modrm_sse2_arith_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint
 
     if (mod != 3 && rm == 4 && inst->address_size != 16) {
         if (*offset >= code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
         inst->has_sib = true;
         inst->sib = code[(*offset)++];
@@ -50,7 +50,7 @@ void decode_modrm_sse2_arith_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint
 
     if (inst->disp_size > 0) {
         if (*offset + inst->disp_size > code_size) {
-            raise_gp(0);
+            raise_gp_ctx(ctx, 0);
         }
 
         inst->displacement = 0;
@@ -71,7 +71,7 @@ void decode_modrm_sse2_arith_pd(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint
     }
 
     if (has_lock_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 }
 
@@ -128,24 +128,24 @@ DecodedInstruction decode_sse2_arith_pd_instruction(CPU_CONTEXT* ctx, uint8_t* c
     }
 
     if (offset + 2 > code_size) {
-        raise_gp(0);
+        raise_gp_ctx(ctx, 0);
     }
 
     if (code[offset++] != 0x0F) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     inst.opcode = code[offset++];
     if (inst.opcode != 0x58 && inst.opcode != 0x59 && inst.opcode != 0x5C && inst.opcode != 0x5E) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (has_unsupported_simd_prefix) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (*mandatory_prefix != 0x66 && *mandatory_prefix != 0xF2) {
-        raise_ud();
+        raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
@@ -188,13 +188,13 @@ uint64_t sse2_arith_pd_double_to_bits(double value) {
     return bits;
 }
 
-double apply_sse2_arith_pd_scalar(uint8_t opcode, double lhs, double rhs) {
+double apply_sse2_arith_pd_scalar(CPU_CONTEXT* ctx, uint8_t opcode, double lhs, double rhs) {
     switch (opcode) {
     case 0x58: return lhs + rhs;
     case 0x59: return lhs * rhs;
     case 0x5C: return lhs - rhs;
     case 0x5E: return lhs / rhs;
-    default: raise_ud(); return 0.0;
+    default: raise_ud_ctx(ctx); return 0.0;
     }
 }
 
@@ -226,7 +226,7 @@ void execute_sse2_arith_pd(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         XMMRegister result = lhs;
         double lhs0 = sse2_arith_pd_bits_to_double(lhs.low);
         double rhs0 = sse2_arith_pd_bits_to_double(read_sse2_arith_pd_scalar_source_bits(ctx, &inst));
-        result.low = sse2_arith_pd_double_to_bits(apply_sse2_arith_pd_scalar(inst.opcode, lhs0, rhs0));
+        result.low = sse2_arith_pd_double_to_bits(apply_sse2_arith_pd_scalar(ctx, inst.opcode, lhs0, rhs0));
         set_xmm128(ctx, dest, result);
         return;
     }
@@ -236,7 +236,7 @@ void execute_sse2_arith_pd(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     for (int lane = 0; lane < 2; lane++) {
         double lhs_lane = sse2_arith_pd_bits_to_double(get_sse2_arith_pd_lane_bits(lhs, lane));
         double rhs_lane = sse2_arith_pd_bits_to_double(get_sse2_arith_pd_lane_bits(rhs, lane));
-        set_sse2_arith_pd_lane_bits(&result, lane, sse2_arith_pd_double_to_bits(apply_sse2_arith_pd_scalar(inst.opcode, lhs_lane, rhs_lane)));
+        set_sse2_arith_pd_lane_bits(&result, lane, sse2_arith_pd_double_to_bits(apply_sse2_arith_pd_scalar(ctx, inst.opcode, lhs_lane, rhs_lane)));
     }
 
     set_xmm128(ctx, dest, result);
