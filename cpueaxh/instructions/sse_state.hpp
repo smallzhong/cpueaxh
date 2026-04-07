@@ -128,7 +128,7 @@ DecodedInstruction decode_sse_state_instruction(CPU_CONTEXT* ctx, uint8_t* code,
 
     uint8_t mod = (inst.modrm >> 6) & 0x03;
     uint8_t reg = (inst.modrm >> 3) & 0x07;
-    if (reg == 2 || reg == 3) {
+    if (reg <= 3) {
         if (mod == 3) {
             raise_ud();
         }
@@ -164,9 +164,83 @@ static void sse_state_validate_mxcsr(uint32_t value) {
     }
 }
 
+static void sse_state_validate_fx_area(uint64_t address) {
+    if ((address & 0x0FULL) != 0) {
+        raise_gp(0);
+    }
+}
+
+static void sse_state_write_fxsave(CPU_CONTEXT* ctx, uint64_t address) {
+    sse_state_validate_fx_area(address);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+
+    write_memory_word(ctx, address + 0x00, 0x037FU);
+    write_memory_word(ctx, address + 0x02, 0x0000U);
+    write_memory_byte(ctx, address + 0x04, 0x00U);
+    write_memory_byte(ctx, address + 0x05, 0x00U);
+    write_memory_word(ctx, address + 0x06, 0x0000U);
+    write_memory_qword(ctx, address + 0x08, 0);
+    write_memory_qword(ctx, address + 0x10, 0);
+    write_memory_dword(ctx, address + 0x18, ctx->mxcsr & 0x0000FFFFU);
+    write_memory_dword(ctx, address + 0x1C, 0x0000FFFFU);
+
+    for (int Index = 0; Index < 8; ++Index) {
+        const uint64_t RegisterAddress = address + 0x20 + static_cast<uint64_t>(Index) * 0x10;
+        write_memory_qword(ctx, RegisterAddress, ctx->mm[Index]);
+        write_memory_qword(ctx, RegisterAddress + 0x08, 0);
+    }
+
+    for (int Index = 0; Index < 16; ++Index) {
+        write_xmm_memory(ctx, address + 0xA0 + static_cast<uint64_t>(Index) * 0x10, get_xmm128(ctx, Index));
+    }
+}
+
+static void sse_state_read_fxrstor(CPU_CONTEXT* ctx, uint64_t address) {
+    sse_state_validate_fx_area(address);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+
+    const uint32_t Mxcsr = read_memory_dword(ctx, address + 0x18);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+    sse_state_validate_mxcsr(Mxcsr);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+
+    ctx->mxcsr = Mxcsr & 0x0000FFFFU;
+    for (int Index = 0; Index < 8; ++Index) {
+        ctx->mm[Index] = read_memory_qword(ctx, address + 0x20 + static_cast<uint64_t>(Index) * 0x10);
+        if (cpu_has_exception(ctx)) {
+            return;
+        }
+    }
+
+    for (int Index = 0; Index < 16; ++Index) {
+        set_xmm128(ctx, Index, read_xmm_memory(ctx, address + 0xA0 + static_cast<uint64_t>(Index) * 0x10));
+        if (cpu_has_exception(ctx)) {
+            return;
+        }
+    }
+}
+
 void execute_sse_state(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = decode_sse_state_instruction(ctx, code, code_size);
     uint8_t reg = (inst.modrm >> 3) & 0x07;
+
+    if (reg == 0) {
+        sse_state_write_fxsave(ctx, inst.mem_address);
+        return;
+    }
+
+    if (reg == 1) {
+        sse_state_read_fxrstor(ctx, inst.mem_address);
+        return;
+    }
 
     if (reg == 2) {
         uint32_t value = read_memory_dword(ctx, inst.mem_address);

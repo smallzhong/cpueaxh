@@ -896,7 +896,12 @@ static bool cpueaxh_try_dispatch_escape(cpueaxh_engine* engine, uint64_t address
         return false;
     }
 
-    cpu_raise_exception(&engine->context, CPU_EXCEPTION_UD, 0);
+    if (instruction_id == CPUEAXH_ESCAPE_INSN_INT3) {
+        cpu_raise_exception(&engine->context, CPU_EXCEPTION_BP, 0);
+    }
+    else {
+        cpu_raise_exception(&engine->context, CPU_EXCEPTION_UD, 0);
+    }
     *callback_error = CPUEAXH_ERR_EXCEPTION;
     return true;
 }
@@ -1307,6 +1312,27 @@ extern "C" void cpueaxh_emu_stop(cpueaxh_engine* engine) {
         return;
     }
     engine->stop_requested = 1;
+}
+
+extern "C" cpueaxh_err cpueaxh_exception_raise(cpueaxh_engine* engine, uint32_t code, uint32_t error_code) {
+    cpueaxh_err error = cpueaxh_validate_engine(engine);
+    if (error != CPUEAXH_ERR_OK) {
+        return error;
+    }
+    if (!cpu_is_exception_code(code)) {
+        return CPUEAXH_ERR_ARG;
+    }
+    cpu_raise_exception(&engine->context, code, error_code);
+    return CPUEAXH_ERR_OK;
+}
+
+extern "C" cpueaxh_err cpueaxh_exception_clear(cpueaxh_engine* engine) {
+    cpueaxh_err error = cpueaxh_validate_engine(engine);
+    if (error != CPUEAXH_ERR_OK) {
+        return error;
+    }
+    cpu_clear_exception(&engine->context);
+    return CPUEAXH_ERR_OK;
 }
 
 extern "C" cpueaxh_err cpueaxh_host_call(cpueaxh_x86_context* context, cpueaxh_cb_host_bridge_t bridge) {

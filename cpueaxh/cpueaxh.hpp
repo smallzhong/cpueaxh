@@ -162,6 +162,9 @@ typedef cpueaxh_err (*cpueaxh_cb_escape_t)(cpueaxh_engine* engine, cpueaxh_x86_c
 #define CPUEAXH_EXCEPTION_UD ((uint32_t)0xE0000004u)
 #define CPUEAXH_EXCEPTION_PF ((uint32_t)0xE0000005u)
 #define CPUEAXH_EXCEPTION_AC ((uint32_t)0xE0000006u)
+#define CPUEAXH_EXCEPTION_BP ((uint32_t)0xE0000007u)
+#define CPUEAXH_EXCEPTION_DB ((uint32_t)0xE0000008u)
+#define CPUEAXH_EXCEPTION_OF ((uint32_t)0xE0000009u)
 
 #define CPUEAXH_X86_REG_RAX 0
 #define CPUEAXH_X86_REG_RCX 1
@@ -330,6 +333,8 @@ cpueaxh_err cpueaxh_set_processor_id(cpueaxh_engine* engine, uint32_t processor_
 cpueaxh_err cpueaxh_emu_start(cpueaxh_engine* engine, uint64_t begin, uint64_t until, uint64_t timeout, size_t count);
 cpueaxh_err cpueaxh_emu_start_function(cpueaxh_engine* engine, uint64_t begin, uint64_t timeout, size_t count);
 void cpueaxh_emu_stop(cpueaxh_engine* engine);
+cpueaxh_err cpueaxh_exception_raise(cpueaxh_engine* engine, uint32_t code, uint32_t error_code);
+cpueaxh_err cpueaxh_exception_clear(cpueaxh_engine* engine);
 
 cpueaxh_err cpueaxh_host_call(cpueaxh_x86_context* context, cpueaxh_cb_host_bridge_t bridge);
 

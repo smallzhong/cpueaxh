@@ -90,6 +90,7 @@ static bool is_branch_opcode(uint16_t opc) {
     case 0xEB: case 0xE9: case 0xEA:              // JMP
     case 0xE8: case 0x9A:                          // CALL
     case 0xC2: case 0xC3: case 0xCA: case 0xCB:    // RET
+    case 0xCF:                                     // IRET/IRETQ
     case 0xFF:                                     // CALL/JMP r/m (all reg fields)
         return true;
     default:
@@ -225,6 +226,10 @@ int cpu_step(CPU_CONTEXT* ctx) {
     // RET far: CB / CA iw
     if (opc == 0x00CB || opc == 0x00CA) {
         execute_ret(ctx, buf, (size_t)fetched);
+    }
+    // IRET/IRETQ: CF
+    else if (raw_opc == 0xCF) {
+        execute_iret(ctx, buf, (size_t)fetched);
     }
     // Supported two-byte 0F xx opcodes (dispatch before single-byte low-byte aliases)
     else if (opc >= 0x0F40 && opc <= 0x0F4F) {

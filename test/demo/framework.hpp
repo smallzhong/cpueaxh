@@ -247,6 +247,7 @@ enum class VectorProgram : std::uint8_t {
     Psrldq,
     PaddqPxor,
     Movdqu,
+    MovapsMemDisp8Neg,
     Pshufb,
     Aesenc,
     Aesenclast,
@@ -1546,6 +1547,7 @@ inline std::vector<ProgramSpec> make_specs(const HostFeatures& features) {
     specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Psrldq), 0, 0, "psrldq" });
     specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::PaddqPxor), 0, 0, "paddq_pxor" });
     specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Movdqu), 0, 0, "movdqu_roundtrip" });
+    specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::MovapsMemDisp8Neg), 0, 0, "movaps_mem_disp8_neg_xmm6" });
     if (features.ssse3) {
         specs.push_back({ Family::VectorOps, static_cast<std::uint32_t>(VectorProgram::Pshufb), 0, 0, "pshufb" });
     }
@@ -1959,6 +1961,14 @@ inline BuiltCase build_case(const ProgramSpec& spec, std::uint64_t seed) {
             code.movdqu_store(buffer0, Reg::RAX);
             code.movdqu_load(Reg::RDX, buffer0);
             code.movdqu_store(buffer1, Reg::RDX);
+            break;
+        case VectorProgram::MovapsMemDisp8Neg:
+            code.lea_rip(Reg::RAX, buffer0);
+            code.binary_reg_imm(BinaryOp::Add, Reg::RAX, 0x58);
+            code.emit8(0x0F);
+            code.emit8(0x29);
+            code.emit8(0x70);
+            code.emit8(0xA8);
             break;
         case VectorProgram::Pshufb:
             code.pshufb(Reg::RAX, Reg::RCX);

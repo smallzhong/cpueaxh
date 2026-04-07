@@ -40,6 +40,9 @@ enum CPU_EXCEPTION_CODE : uint32_t {
     CPU_EXCEPTION_UD   = 0xE0000004,
     CPU_EXCEPTION_PF   = 0xE0000005,
     CPU_EXCEPTION_AC   = 0xE0000006,
+    CPU_EXCEPTION_BP   = 0xE0000007,
+    CPU_EXCEPTION_DB   = 0xE0000008,
+    CPU_EXCEPTION_OF   = 0xE0000009,
 };
 
 struct CPU_EXCEPTION_STATE {
@@ -48,7 +51,7 @@ struct CPU_EXCEPTION_STATE {
 };
 
 inline bool cpu_is_exception_code(uint32_t code) {
-    return code >= CPU_EXCEPTION_DE && code <= CPU_EXCEPTION_AC;
+    return code >= CPU_EXCEPTION_DE && code <= CPU_EXCEPTION_OF;
 }
 
 inline void cpu_exception_reset(CPU_EXCEPTION_STATE* state) {
@@ -199,6 +202,9 @@ inline void cpu_raise_exception(CPU_CONTEXT* ctx, uint32_t code, uint32_t error_
 #define raise_ud()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_UD, 0)
 #define raise_pf(ec)  cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_PF, (uint32_t)(ec))
 #define raise_ac()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_AC, 0)
+#define raise_bp()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_BP, 0)
+#define raise_db()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_DB, 0)
+#define raise_of()    cpu_raise_exception(cpu_get_active_context(), CPU_EXCEPTION_OF, 0)
 
 struct DecodedInstruction {
     uint8_t opcode;
