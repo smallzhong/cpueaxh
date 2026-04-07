@@ -50,7 +50,6 @@ uint64_t get_xlat_linear_address(CPU_CONTEXT* ctx, int address_size, int segment
 DecodedInstruction decode_xlat_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = {};
     size_t offset = 0;
-    int segment_index = SEG_DS;
     bool has_lock_prefix = false;
 
     ctx->rex_present = false;
@@ -63,7 +62,6 @@ DecodedInstruction decode_xlat_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 
     while (offset < code_size) {
         uint8_t prefix = code[offset];
-        int seg_override = decode_xlat_segment_override(prefix);
         if (prefix == 0x66) {
             ctx->operand_size_override = true;
             offset++;
@@ -84,8 +82,7 @@ DecodedInstruction decode_xlat_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             has_lock_prefix = true;
             offset++;
         }
-        else if (seg_override >= 0) {
-            segment_index = seg_override;
+        else if (cpu_decode_segment_override(prefix) >= 0) {
             offset++;
         }
         else if (prefix == 0xF2 || prefix == 0xF3) {
@@ -110,7 +107,7 @@ DecodedInstruction decode_xlat_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
     }
 
     inst.address_size = decode_xlat_address_size(ctx);
-    inst.immediate = (uint64_t)segment_index;
+    inst.immediate = (uint64_t)cpu_effective_segment_override_or_default(ctx, SEG_DS);
     inst.inst_size = (int)offset;
     finalize_rip_relative_address(ctx, &inst, (int)offset);
     ctx->last_inst_size = (int)offset;
@@ -120,5 +117,8 @@ DecodedInstruction decode_xlat_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 void execute_xlat(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = decode_xlat_instruction(ctx, code, code_size);
     uint64_t address = get_xlat_linear_address(ctx, inst.address_size, (int)inst.immediate);
+    if (!cpu_validate_linear_address(ctx, address, (int)inst.immediate)) {
+        return;
+    }
     set_reg8(ctx, REG_RAX, read_memory_byte(ctx, address));
 }

@@ -325,7 +325,8 @@ uint64_t get_effective_address(CPU_CONTEXT* ctx, uint8_t modrm, uint8_t* sib, in
         return addr;
     }
 
-    const int segment_index = cpu_default_segment_for_memory_operand(ctx, modrm, sib != NULL, sib ? *sib : 0, addr_size);
+    const int default_segment = cpu_default_segment_for_memory_operand(ctx, modrm, sib != NULL, sib ? *sib : 0, addr_size);
+    const int segment_index = cpu_effective_segment_override_or_default(ctx, default_segment);
     addr += cpu_segment_base_for_addressing(ctx, segment_index);
     cpu_validate_linear_address(ctx, addr, segment_index);
     return addr;

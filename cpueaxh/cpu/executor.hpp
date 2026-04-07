@@ -108,6 +108,17 @@ static uint8_t peek_mandatory_prefix(const uint8_t* buf, int prefix_len) {
     return mandatory_prefix;
 }
 
+static int peek_segment_override(const uint8_t* buf, int prefix_len) {
+    int segment_override = -1;
+    for (int i = 0; i < prefix_len; i++) {
+        int decoded_segment = cpu_decode_segment_override(buf[i]);
+        if (decoded_segment >= 0) {
+            segment_override = decoded_segment;
+        }
+    }
+    return segment_override;
+}
+
 // Return true for opcodes whose execute_* handler updates ctx->rip directly
 // (branches). For all others the executor advances rip by last_inst_size.
 static bool is_branch_opcode(uint16_t opc) {
@@ -209,6 +220,8 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
     uint8_t ff_reg = 0xFF;
     uint8_t group2_reg = 0xFF;
 
+    ctx->segment_override = -1;
+
     if (prefetched_bytes && prefetched_size > 0) {
         fetched = prefetched_size > MAX_INST_FETCH ? MAX_INST_FETCH : prefetched_size;
         buf = const_cast<uint8_t*>(prefetched_bytes);
@@ -255,6 +268,7 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
     raw_opc = (uint8_t)(opc & 0xFF);
     repeat_prefix = peek_repeat_prefix(buf, prefix_len);
     mandatory_prefix = peek_mandatory_prefix(buf, prefix_len);
+    ctx->segment_override = peek_segment_override(buf, prefix_len);
 
     // HLT (F4) is escape-owned.
     if (opc == 0x00F4) {
@@ -881,9 +895,11 @@ cpu_step_finish:
             }
         }
         ctx->exception = exception_state;
+        ctx->segment_override = -1;
         return CPU_STEP_EXCEPTION;
     }
 
+    ctx->segment_override = -1;
     return result_code;
 }
 

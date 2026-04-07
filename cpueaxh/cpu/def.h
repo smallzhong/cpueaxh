@@ -152,6 +152,7 @@ struct CPU_CONTEXT {
 
     bool operand_size_override;
     bool address_size_override;
+    int segment_override;
 
     // Set by every decoder to the byte-length of the decoded instruction.
     // cpu_step uses this to advance RIP for non-branch instructions.
@@ -159,6 +160,13 @@ struct CPU_CONTEXT {
 
     CPU_EXCEPTION_STATE exception;
 };
+
+inline int cpu_effective_segment_override_or_default(const CPU_CONTEXT* ctx, int default_segment) {
+    if (!ctx) {
+        return default_segment;
+    }
+    return (ctx->segment_override >= SEG_ES && ctx->segment_override <= SEG_GS) ? ctx->segment_override : default_segment;
+}
 
 struct CPU_SCALAR_SNAPSHOT {
     uint64_t regs[16];
@@ -183,6 +191,7 @@ struct CPU_SCALAR_SNAPSHOT {
     bool rex_b;
     bool operand_size_override;
     bool address_size_override;
+    int segment_override;
     int last_inst_size;
 };
 
@@ -220,6 +229,7 @@ inline void cpu_capture_scalar_snapshot(CPU_SCALAR_SNAPSHOT* out, const CPU_CONT
     out->rex_b = ctx->rex_b;
     out->operand_size_override = ctx->operand_size_override;
     out->address_size_override = ctx->address_size_override;
+    out->segment_override = ctx->segment_override;
     out->last_inst_size = ctx->last_inst_size;
 }
 
@@ -250,6 +260,7 @@ inline void cpu_restore_scalar_snapshot(CPU_CONTEXT* ctx, const CPU_SCALAR_SNAPS
     ctx->rex_b = snapshot->rex_b;
     ctx->operand_size_override = snapshot->operand_size_override;
     ctx->address_size_override = snapshot->address_size_override;
+    ctx->segment_override = snapshot->segment_override;
     ctx->last_inst_size = snapshot->last_inst_size;
 }
 
@@ -306,6 +317,20 @@ inline void raise_ac_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPT
 inline void raise_bp_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_BP, 0); }
 inline void raise_db_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_DB, 0); }
 inline void raise_of_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_OF, 0); }
+
+inline int cpu_decode_segment_override(uint8_t prefix) {
+    switch (prefix) {
+    case 0x26: return SEG_ES;
+    case 0x2E: return SEG_CS;
+    case 0x36: return SEG_SS;
+    case 0x3E: return SEG_DS;
+    case 0x64: return SEG_FS;
+    case 0x65: return SEG_GS;
+    default:   return -1;
+    }
+}
+
+inline int cpu_effective_segment_override_or_default(const CPU_CONTEXT* ctx, int default_segment);
 
 inline bool cpu_is_canonical_address(uint64_t address) {
     const uint64_t sign_bit = (address >> 47) & 0x1ULL;

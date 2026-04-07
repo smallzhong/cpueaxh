@@ -111,7 +111,6 @@ int decode_cmps_segment_override(uint8_t prefix) {
 DecodedInstruction decode_cmps_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = {};
     size_t offset = 0;
-    int source_segment = SEG_DS;
     bool has_lock_prefix = false;
 
     ctx->rex_present = false;
@@ -124,7 +123,6 @@ DecodedInstruction decode_cmps_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 
     while (offset < code_size) {
         uint8_t prefix = code[offset];
-        int seg_override = decode_cmps_segment_override(prefix);
         if (prefix == 0x66) {
             ctx->operand_size_override = true;
             offset++;
@@ -145,8 +143,7 @@ DecodedInstruction decode_cmps_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             has_lock_prefix = true;
             offset++;
         }
-        else if (seg_override >= 0) {
-            source_segment = seg_override;
+        else if (cpu_decode_segment_override(prefix) >= 0) {
             offset++;
         }
         else if (prefix == 0xF2 || prefix == 0xF3) {
@@ -172,7 +169,7 @@ DecodedInstruction decode_cmps_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 
     inst.operand_size = decode_cmps_operand_size(ctx, inst.opcode);
     inst.address_size = decode_cmps_address_size(ctx);
-    inst.immediate = (uint64_t)source_segment;
+    inst.immediate = (uint64_t)cpu_effective_segment_override_or_default(ctx, SEG_DS);
     inst.inst_size = (int)offset;
     finalize_rip_relative_address(ctx, &inst, (int)offset);
     ctx->last_inst_size = (int)offset;
@@ -187,6 +184,10 @@ void execute_cmps(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     uint64_t dest_index = get_cmps_index(ctx, REG_RDI, inst.address_size);
     uint64_t source_addr = cmps_segment_base(ctx, source_segment) + source_index;
     uint64_t dest_addr = cmps_segment_base(ctx, SEG_ES) + dest_index;
+    if (!cpu_validate_linear_address(ctx, source_addr, source_segment) ||
+        !cpu_validate_linear_address(ctx, dest_addr, SEG_ES)) {
+        return;
+    }
     uint64_t source_value = read_cmps_value(ctx, source_addr, inst.operand_size);
     uint64_t dest_value = read_cmps_value(ctx, dest_addr, inst.operand_size);
     uint64_t step = (uint64_t)(inst.operand_size / 8);

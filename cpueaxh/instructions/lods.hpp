@@ -95,7 +95,6 @@ void write_lods_accumulator(CPU_CONTEXT* ctx, int operand_size, uint64_t value) 
 DecodedInstruction decode_lods_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = {};
     size_t offset = 0;
-    int source_segment = SEG_DS;
     bool has_lock_prefix = false;
 
     ctx->rex_present = false;
@@ -108,7 +107,6 @@ DecodedInstruction decode_lods_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 
     while (offset < code_size) {
         uint8_t prefix = code[offset];
-        int seg_override = decode_lods_segment_override(prefix);
         if (prefix == 0x66) {
             ctx->operand_size_override = true;
             offset++;
@@ -129,8 +127,7 @@ DecodedInstruction decode_lods_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
             has_lock_prefix = true;
             offset++;
         }
-        else if (seg_override >= 0) {
-            source_segment = seg_override;
+        else if (cpu_decode_segment_override(prefix) >= 0) {
             offset++;
         }
         else if (prefix == 0xF2 || prefix == 0xF3) {
@@ -156,7 +153,7 @@ DecodedInstruction decode_lods_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 
     inst.operand_size = decode_lods_operand_size(ctx, inst.opcode);
     inst.address_size = decode_lods_address_size(ctx);
-    inst.immediate = (uint64_t)source_segment;
+    inst.immediate = (uint64_t)cpu_effective_segment_override_or_default(ctx, SEG_DS);
     inst.inst_size = (int)offset;
     finalize_rip_relative_address(ctx, &inst, (int)offset);
     ctx->last_inst_size = (int)offset;
@@ -165,8 +162,12 @@ DecodedInstruction decode_lods_instruction(CPU_CONTEXT* ctx, uint8_t* code, size
 
 void execute_lods(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = decode_lods_instruction(ctx, code, code_size);
+    const int source_segment = (int)inst.immediate;
     uint64_t source_index = get_lods_index(ctx, inst.address_size);
-    uint64_t source_addr = lods_segment_base(ctx, (int)inst.immediate) + source_index;
+    uint64_t source_addr = lods_segment_base(ctx, source_segment) + source_index;
+    if (!cpu_validate_linear_address(ctx, source_addr, source_segment)) {
+        return;
+    }
     uint64_t value = read_lods_value(ctx, source_addr, inst.operand_size);
     uint64_t step = (uint64_t)(inst.operand_size / 8);
 

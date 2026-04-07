@@ -596,8 +596,6 @@ void decode_modrm_mov_cr(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* co
 DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = {};
     size_t offset = 0;
-    int segment_index = SEG_DS;
-    bool has_segment_override = false;
 
     ctx->rex_present = false;
     ctx->rex_w = false;
@@ -633,11 +631,6 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
                 raise_ud_ctx(ctx);
             }
 
-            int seg_override = decode_mov_segment_override(prefix);
-            if (seg_override >= 0) {
-                segment_index = seg_override;
-                has_segment_override = true;
-            }
             offset++;
         }
         else {
@@ -853,16 +846,9 @@ DecodedInstruction decode_mov_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_
     finalize_rip_relative_address(ctx, &inst, (int)offset);
 
     if (inst.opcode >= 0xA0 && inst.opcode <= 0xA3) {
+        const int segment_index = cpu_effective_segment_override_or_default(ctx, SEG_DS);
         inst.mem_address += mov_segment_base(ctx, segment_index);
         cpu_validate_linear_address(ctx, inst.mem_address, segment_index);
-    }
-    else if (inst.has_modrm && has_segment_override) {
-        uint8_t mod = (inst.modrm >> 6) & 0x03;
-        if (mod != 3) {
-            const int default_segment = cpu_default_segment_for_memory_operand(ctx, inst.modrm, inst.has_sib, inst.sib, inst.address_size);
-            inst.mem_address += mov_segment_base(ctx, segment_index) - mov_segment_base(ctx, default_segment);
-            cpu_validate_linear_address(ctx, inst.mem_address, segment_index);
-        }
     }
 
     ctx->last_inst_size = (int)offset;

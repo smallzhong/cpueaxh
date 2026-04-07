@@ -5,6 +5,7 @@ void init_cpu_context(CPU_CONTEXT* ctx, MEMORY_MANAGER* mem_mgr) {
     ctx->mem_mgr = mem_mgr;
     ctx->cpl = 0;
     ctx->mxcsr = 0x1F80;
+    ctx->segment_override = -1;
     ctx->control_regs[REG_CR0] = 0x80000011ull;
     ctx->control_regs[REG_CR4] = 0x00000020ull;
 

@@ -104,8 +104,6 @@ bool is_pcmpistrm_instruction(const uint8_t* code, int len, int prefix_len) {
 DecodedInstruction decode_pcmpistrm_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     DecodedInstruction inst = {};
     size_t offset = 0;
-    int segment_index = SEG_DS;
-    bool has_segment_override = false;
     bool has_lock_prefix = false;
     uint8_t mandatory_prefix = 0;
     bool has_unsupported_prefix = false;
@@ -149,11 +147,6 @@ DecodedInstruction decode_pcmpistrm_instruction(CPU_CONTEXT* ctx, uint8_t* code,
             offset++;
         }
         else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E || prefix == 0x64 || prefix == 0x65) {
-            int seg_override = decode_pcmpistrm_segment_override(prefix);
-            if (seg_override >= 0) {
-                segment_index = seg_override;
-                has_segment_override = true;
-            }
             offset++;
         }
         else {
@@ -195,15 +188,6 @@ DecodedInstruction decode_pcmpistrm_instruction(CPU_CONTEXT* ctx, uint8_t* code,
 
     inst.inst_size = (int)offset;
     finalize_rip_relative_address(ctx, &inst, (int)offset);
-
-    if (inst.has_modrm && has_segment_override) {
-        uint8_t mod = (inst.modrm >> 6) & 0x03;
-        if (mod != 3) {
-            const int default_segment = cpu_default_segment_for_memory_operand(ctx, inst.modrm, inst.has_sib, inst.sib, inst.address_size);
-            inst.mem_address += pcmpistrm_segment_base(ctx, segment_index) - pcmpistrm_segment_base(ctx, default_segment);
-            cpu_validate_linear_address(ctx, inst.mem_address, segment_index);
-        }
-    }
 
     ctx->last_inst_size = (int)offset;
     return inst;
