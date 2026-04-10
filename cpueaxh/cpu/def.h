@@ -43,6 +43,8 @@ enum CPU_EXCEPTION_CODE : uint32_t {
     CPU_EXCEPTION_BP   = 0xE0000007,
     CPU_EXCEPTION_DB   = 0xE0000008,
     CPU_EXCEPTION_OF   = 0xE0000009,
+    CPU_EXCEPTION_NM   = 0xE000000A,
+    CPU_EXCEPTION_MF   = 0xE000000B,
 };
 
 struct CPU_EXCEPTION_STATE {
@@ -51,7 +53,7 @@ struct CPU_EXCEPTION_STATE {
 };
 
 inline bool cpu_is_exception_code(uint32_t code) {
-    return code >= CPU_EXCEPTION_DE && code <= CPU_EXCEPTION_OF;
+    return code >= CPU_EXCEPTION_DE && code <= CPU_EXCEPTION_MF;
 }
 
 inline void cpu_exception_reset(CPU_EXCEPTION_STATE* state) {
@@ -124,6 +126,13 @@ struct CPU_CONTEXT {
     XMMRegister ymm_upper[16];
     uint64_t mm[8];
     uint32_t mxcsr;
+    uint16_t x87_control_word;
+    uint16_t x87_status_word;
+    uint16_t x87_tag_word;
+    uint16_t x87_last_opcode;
+    uint64_t x87_instruction_pointer;
+    uint64_t x87_data_pointer;
+    bool x87_pending_exception;
     SegmentRegister es;
     SegmentRegister cs;
     SegmentRegister ss;
@@ -161,6 +170,32 @@ struct CPU_CONTEXT {
     CPU_EXCEPTION_STATE exception;
 };
 
+inline uint16_t cpu_x87_default_control_word() {
+    return 0x037Fu;
+}
+
+inline uint16_t cpu_x87_default_status_word() {
+    return 0x0000u;
+}
+
+inline uint16_t cpu_x87_default_tag_word() {
+    return 0xFFFFu;
+}
+
+inline void cpu_reset_x87_state(CPU_CONTEXT* ctx) {
+    if (!ctx) {
+        return;
+    }
+
+    ctx->x87_control_word = cpu_x87_default_control_word();
+    ctx->x87_status_word = cpu_x87_default_status_word();
+    ctx->x87_tag_word = cpu_x87_default_tag_word();
+    ctx->x87_last_opcode = 0;
+    ctx->x87_instruction_pointer = 0;
+    ctx->x87_data_pointer = 0;
+    ctx->x87_pending_exception = false;
+}
+
 inline int cpu_effective_segment_override_or_default(const CPU_CONTEXT* ctx, int default_segment) {
     if (!ctx) {
         return default_segment;
@@ -180,6 +215,13 @@ struct CPU_SCALAR_SNAPSHOT {
     uint64_t rip;
     uint64_t rflags;
     uint8_t cpl;
+    uint16_t x87_control_word;
+    uint16_t x87_status_word;
+    uint16_t x87_tag_word;
+    uint16_t x87_last_opcode;
+    uint64_t x87_instruction_pointer;
+    uint64_t x87_data_pointer;
+    bool x87_pending_exception;
     uint64_t gdtr_base;
     uint16_t gdtr_limit;
     uint64_t ldtr_base;
@@ -218,6 +260,13 @@ inline void cpu_capture_scalar_snapshot(CPU_SCALAR_SNAPSHOT* out, const CPU_CONT
     out->rip = ctx->rip;
     out->rflags = ctx->rflags;
     out->cpl = ctx->cpl;
+    out->x87_control_word = ctx->x87_control_word;
+    out->x87_status_word = ctx->x87_status_word;
+    out->x87_tag_word = ctx->x87_tag_word;
+    out->x87_last_opcode = ctx->x87_last_opcode;
+    out->x87_instruction_pointer = ctx->x87_instruction_pointer;
+    out->x87_data_pointer = ctx->x87_data_pointer;
+    out->x87_pending_exception = ctx->x87_pending_exception;
     out->gdtr_base = ctx->gdtr_base;
     out->gdtr_limit = ctx->gdtr_limit;
     out->ldtr_base = ctx->ldtr_base;
@@ -249,6 +298,13 @@ inline void cpu_restore_scalar_snapshot(CPU_CONTEXT* ctx, const CPU_SCALAR_SNAPS
     ctx->rip = snapshot->rip;
     ctx->rflags = snapshot->rflags;
     ctx->cpl = snapshot->cpl;
+    ctx->x87_control_word = snapshot->x87_control_word;
+    ctx->x87_status_word = snapshot->x87_status_word;
+    ctx->x87_tag_word = snapshot->x87_tag_word;
+    ctx->x87_last_opcode = snapshot->x87_last_opcode;
+    ctx->x87_instruction_pointer = snapshot->x87_instruction_pointer;
+    ctx->x87_data_pointer = snapshot->x87_data_pointer;
+    ctx->x87_pending_exception = snapshot->x87_pending_exception;
     ctx->gdtr_base = snapshot->gdtr_base;
     ctx->gdtr_limit = snapshot->gdtr_limit;
     ctx->ldtr_base = snapshot->ldtr_base;
@@ -317,6 +373,46 @@ inline void raise_ac_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPT
 inline void raise_bp_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_BP, 0); }
 inline void raise_db_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_DB, 0); }
 inline void raise_of_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_OF, 0); }
+inline void raise_nm_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_NM, 0); }
+inline void raise_mf_ctx(CPU_CONTEXT* ctx) { cpu_raise_exception(ctx, CPU_EXCEPTION_MF, 0); }
+
+inline bool cpu_x87_device_unavailable(const CPU_CONTEXT* ctx) {
+    if (!ctx) {
+        return false;
+    }
+    const uint64_t cr0 = ctx->control_regs[REG_CR0];
+    return (cr0 & ((1ull << 2) | (1ull << 3))) != 0;
+}
+
+inline bool cpu_x87_has_pending_exception(const CPU_CONTEXT* ctx) {
+    return ctx && ctx->x87_pending_exception;
+}
+
+inline void cpu_x87_recompute_pending_exception(CPU_CONTEXT* ctx) {
+    if (!ctx) {
+        return;
+    }
+
+    const uint16_t status_flags = static_cast<uint16_t>(ctx->x87_status_word & 0x003Fu);
+    const uint16_t unmasked_exceptions = static_cast<uint16_t>(status_flags & static_cast<uint16_t>(~ctx->x87_control_word) & 0x003Fu);
+    ctx->x87_pending_exception = unmasked_exceptions != 0;
+}
+
+inline bool cpu_x87_check_device_available(CPU_CONTEXT* ctx) {
+    if (cpu_x87_device_unavailable(ctx)) {
+        raise_nm_ctx(ctx);
+        return false;
+    }
+    return true;
+}
+
+inline bool cpu_x87_check_wait(CPU_CONTEXT* ctx, bool has_wait_prefix) {
+    if (has_wait_prefix && cpu_x87_has_pending_exception(ctx)) {
+        raise_mf_ctx(ctx);
+        return false;
+    }
+    return true;
+}
 
 inline int cpu_decode_segment_override(uint8_t prefix) {
     switch (prefix) {

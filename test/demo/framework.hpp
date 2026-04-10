@@ -55,7 +55,14 @@ constexpr std::size_t kBufferSize = 64;
 constexpr std::size_t kDataSize = kSlotSize * 4 + kBufferSize * 2;
 constexpr std::uint64_t kInitialMxcsr = 0x1F80;
 constexpr std::uint16_t kInitialX87ControlWord = 0x037F;
+constexpr std::uint16_t kInitialX87StatusWord = 0x0000;
 constexpr std::uint64_t kInitialRspOffset = kStackSize - 0x200;
+
+inline bool expected_x87_pending(std::uint16_t control_word, std::uint16_t status_word) {
+    const std::uint16_t status_flags = static_cast<std::uint16_t>(status_word & 0x003Fu);
+    const std::uint16_t unmasked = static_cast<std::uint16_t>(status_flags & static_cast<std::uint16_t>(~control_word) & 0x003Fu);
+    return unmasked != 0;
+}
 
 struct TestBridgeBlock {
     std::uint64_t host_rsp;
@@ -309,6 +316,7 @@ struct Failure {
 struct HostFeatures {
     bool avx = false;
     bool fma = false;
+    bool popcnt = false;
     bool ssse3 = false;
     bool sse41 = false;
     bool sse42 = false;
@@ -446,6 +454,7 @@ inline HostFeatures query_host_features() {
     if (max_leaf >= 1) {
         __cpuidex(cpu_info, 1, 0);
         const bool has_fma = (cpu_info[2] & (1 << 12)) != 0;
+        features.popcnt = (cpu_info[2] & (1 << 23)) != 0;
         const bool has_xsave = (cpu_info[2] & (1 << 26)) != 0;
         const bool has_osxsave = (cpu_info[2] & (1 << 27)) != 0;
         const bool has_avx = (cpu_info[2] & (1 << 28)) != 0;
@@ -2715,6 +2724,648 @@ inline bool run_manual_store_case(
     return ok;
 }
 
+inline bool read_internal_word(MEMORY_MANAGER& memory_manager, std::uint64_t address, std::uint16_t& value) {
+    std::uint8_t low = 0;
+    std::uint8_t high = 0;
+    if (mm_read_byte_checked(&memory_manager, address, &low, MM_PROT_READ) != MM_ACCESS_OK ||
+        mm_read_byte_checked(&memory_manager, address + 1, &high, MM_PROT_READ) != MM_ACCESS_OK) {
+        return false;
+    }
+
+    value = static_cast<std::uint16_t>(low | (static_cast<std::uint16_t>(high) << 8));
+    return true;
+}
+
+inline bool write_internal_word(MEMORY_MANAGER& memory_manager, std::uint64_t address, std::uint16_t value) {
+    const std::uint8_t low = static_cast<std::uint8_t>(value & 0xFFu);
+    const std::uint8_t high = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
+    return mm_write_byte_checked(&memory_manager, address, low) == MM_ACCESS_OK &&
+        mm_write_byte_checked(&memory_manager, address + 1, high) == MM_ACCESS_OK;
+}
+
+inline bool read_internal_dword(MEMORY_MANAGER& memory_manager, std::uint64_t address, std::uint32_t& value) {
+    std::uint32_t result = 0;
+    for (std::uint32_t index = 0; index < 4; ++index) {
+        std::uint8_t byte = 0;
+        if (mm_read_byte_checked(&memory_manager, address + index, &byte, MM_PROT_READ) != MM_ACCESS_OK) {
+            return false;
+        }
+        result |= static_cast<std::uint32_t>(byte) << (index * 8);
+    }
+    value = result;
+    return true;
+}
+
+inline bool write_internal_dword(MEMORY_MANAGER& memory_manager, std::uint64_t address, std::uint32_t value) {
+    for (std::uint32_t index = 0; index < 4; ++index) {
+        const std::uint8_t byte = static_cast<std::uint8_t>((value >> (index * 8)) & 0xFFu);
+        if (mm_write_byte_checked(&memory_manager, address + index, byte) != MM_ACCESS_OK) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool run_manual_x87_status_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint16_t status_word,
+    bool store_to_ax,
+    std::uint64_t store_offset,
+    Failure& failure) {
+    MEMORY_MANAGER memory_manager = {};
+    CPU_CONTEXT context = {};
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        std::vector<std::uint8_t> image = code;
+        image.push_back(0x90);
+        image.push_back(0x90);
+        if (!initialize_manual_cpu_context(context, memory_manager, image, initial, guest_rsp, failure, name)) {
+            break;
+        }
+
+        context.x87_status_word = status_word;
+
+        const int step = cpu_step(&context);
+        if (step != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = "status store step failed";
+            break;
+        }
+
+        if ((context.rflags & kStatusMask) != (initial.rflags & kStatusMask)) {
+            failure.case_name = name;
+            failure.detail = "flags changed unexpectedly";
+            break;
+        }
+
+        if (store_to_ax) {
+            const std::uint64_t expected_rax = (initial.regs[0] & ~0xFFFFull) | status_word;
+            if (context.regs[REG_RAX] != expected_rax) {
+                failure.case_name = name;
+                failure.detail = "rax status store mismatch";
+                break;
+            }
+        }
+        else {
+            if (context.regs[REG_RAX] != initial.regs[0]) {
+                failure.case_name = name;
+                failure.detail = "rax changed unexpectedly";
+                break;
+            }
+
+            std::uint16_t stored = 0;
+            if (!read_internal_word(memory_manager, guest_rsp + store_offset, stored)) {
+                failure.case_name = name;
+                failure.detail = "status readback failed";
+                break;
+            }
+            if (stored != status_word) {
+                failure.case_name = name;
+                failure.detail = "stored status mismatch";
+                break;
+            }
+        }
+
+        ok = true;
+    } while (false);
+
+    mm_destroy(&memory_manager);
+    return ok;
+}
+
+inline bool run_manual_x87_reset_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    Failure& failure) {
+    MEMORY_MANAGER memory_manager = {};
+    CPU_CONTEXT context = {};
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        std::vector<std::uint8_t> image = code;
+        image.push_back(0x90);
+        image.push_back(0x90);
+        if (!initialize_manual_cpu_context(context, memory_manager, image, initial, guest_rsp, failure, name)) {
+            break;
+        }
+
+        context.x87_control_word = static_cast<std::uint16_t>(0x1100u | (seed & 0x00FFu));
+        context.x87_status_word = static_cast<std::uint16_t>(0x2200u | ((seed >> 8) & 0x00FFu));
+        context.x87_tag_word = static_cast<std::uint16_t>(0x3300u | ((seed >> 16) & 0x00FFu));
+        context.x87_last_opcode = static_cast<std::uint16_t>(0x4400u | ((seed >> 24) & 0x00FFu));
+        context.x87_instruction_pointer = 0x1122334455667788ull ^ seed;
+        context.x87_data_pointer = 0x8877665544332211ull ^ (seed << 1);
+
+        for (int index = 0; index < 3; ++index) {
+            const int step = cpu_step(&context);
+            if (step != kCpuStepOk || cpu_has_exception(&context)) {
+                failure.case_name = name;
+                failure.detail = "x87 reset sequence failed";
+                goto cleanup;
+            }
+        }
+
+        if (context.x87_control_word != kInitialX87ControlWord ||
+            context.x87_status_word != kInitialX87StatusWord ||
+            context.x87_tag_word != 0xFFFFu ||
+            context.x87_last_opcode != 0 ||
+            context.x87_instruction_pointer != 0 ||
+            context.x87_data_pointer != 0) {
+            failure.case_name = name;
+            failure.detail = "x87 state reset mismatch";
+            break;
+        }
+
+        std::uint16_t stored_control = 0;
+        std::uint16_t stored_status = 0;
+        if (!read_internal_word(memory_manager, guest_rsp + 0x40, stored_control) ||
+            !read_internal_word(memory_manager, guest_rsp + 0x42, stored_status)) {
+            failure.case_name = name;
+            failure.detail = "x87 reset readback failed";
+            break;
+        }
+        if (stored_control != kInitialX87ControlWord || stored_status != kInitialX87StatusWord) {
+            failure.case_name = name;
+            failure.detail = "x87 reset store mismatch";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+cleanup:
+    mm_destroy(&memory_manager);
+    return ok;
+}
+
+inline bool run_manual_x87_fldcw_load_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint16_t source_control_word,
+    std::uint16_t initial_status_word,
+    bool expected_pending_after_load,
+    Failure& failure) {
+    MEMORY_MANAGER memory_manager = {};
+    CPU_CONTEXT context = {};
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        std::vector<std::uint8_t> image = code;
+        image.push_back(0x90);
+        image.push_back(0x90);
+        if (!initialize_manual_cpu_context(context, memory_manager, image, initial, guest_rsp, failure, name)) {
+            break;
+        }
+        if (!write_internal_word(memory_manager, guest_rsp + 0x40, source_control_word)) {
+            failure.case_name = name;
+            failure.detail = "source control write failed";
+            break;
+        }
+
+        context.x87_control_word = kInitialX87ControlWord;
+        context.x87_status_word = initial_status_word;
+        context.x87_pending_exception = false;
+
+        const int load_step = cpu_step(&context);
+        if (load_step != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = "fldcw step failed";
+            break;
+        }
+        if (context.x87_control_word != source_control_word) {
+            failure.case_name = name;
+            failure.detail = "control word load mismatch";
+            break;
+        }
+        if (context.x87_pending_exception != expected_pending_after_load) {
+            failure.case_name = name;
+            failure.detail = "pending exception state mismatch";
+            break;
+        }
+
+        const int store_step = cpu_step(&context);
+        if (store_step != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = "follow-up fnstcw step failed";
+            break;
+        }
+
+        std::uint16_t stored = 0;
+        if (!read_internal_word(memory_manager, guest_rsp + 0x42, stored)) {
+            failure.case_name = name;
+            failure.detail = "control word readback failed";
+            break;
+        }
+        if (stored != source_control_word) {
+            failure.case_name = name;
+            failure.detail = "stored control word mismatch";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    mm_destroy(&memory_manager);
+    return ok;
+}
+
+inline bool run_manual_x87_fldcw_unmask_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint16_t source_control_word,
+    std::uint16_t initial_status_word,
+    Failure& failure) {
+    MEMORY_MANAGER memory_manager = {};
+    CPU_CONTEXT context = {};
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        std::vector<std::uint8_t> image = code;
+        image.push_back(0x90);
+        image.push_back(0x90);
+        if (!initialize_manual_cpu_context(context, memory_manager, image, initial, guest_rsp, failure, name)) {
+            break;
+        }
+        if (!write_internal_word(memory_manager, guest_rsp + 0x40, source_control_word)) {
+            failure.case_name = name;
+            failure.detail = "source control write failed";
+            break;
+        }
+
+        context.x87_control_word = kInitialX87ControlWord;
+        context.x87_status_word = initial_status_word;
+        context.x87_pending_exception = false;
+
+        const int load_step = cpu_step(&context);
+        if (load_step != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = "fldcw step failed";
+            break;
+        }
+        if (context.x87_control_word != source_control_word || !context.x87_pending_exception) {
+            failure.case_name = name;
+            failure.detail = "fldcw did not arm pending exception";
+            break;
+        }
+
+        const int wait_step = cpu_step(&context);
+        if (wait_step != kCpuStepException || context.exception.code != CPUEAXH_EXCEPTION_MF) {
+            failure.case_name = name;
+            failure.detail = "expected delayed x87 #MF";
+            break;
+        }
+
+        std::uint16_t stored = 0;
+        if (!read_internal_word(memory_manager, guest_rsp + 0x42, stored)) {
+            failure.case_name = name;
+            failure.detail = "control word readback failed";
+            break;
+        }
+        if (stored != 0) {
+            failure.case_name = name;
+            failure.detail = "waiting instruction executed despite #MF";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    mm_destroy(&memory_manager);
+    return ok;
+}
+
+inline bool run_manual_x87_env_store_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint16_t control_word,
+    std::uint16_t status_word,
+    std::uint16_t tag_word,
+    std::uint16_t last_opcode,
+    std::uint64_t instruction_pointer,
+    std::uint64_t data_pointer,
+    bool pending_exception,
+    bool waiting_form,
+    Failure& failure) {
+    MEMORY_MANAGER memory_manager = {};
+    CPU_CONTEXT context = {};
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        std::vector<std::uint8_t> image = code;
+        image.push_back(0x90);
+        image.push_back(0x90);
+        if (!initialize_manual_cpu_context(context, memory_manager, image, initial, guest_rsp, failure, name)) {
+            break;
+        }
+
+        context.x87_control_word = control_word;
+        context.x87_status_word = status_word;
+        context.x87_tag_word = tag_word;
+        context.x87_last_opcode = last_opcode;
+        context.x87_instruction_pointer = instruction_pointer;
+        context.x87_data_pointer = data_pointer;
+        context.x87_pending_exception = pending_exception;
+
+        const int step = cpu_step(&context);
+        if (waiting_form && pending_exception) {
+            if (step != kCpuStepException || context.exception.code != CPUEAXH_EXCEPTION_MF) {
+                failure.case_name = name;
+                failure.detail = "expected x87 #MF";
+                break;
+            }
+            ok = true;
+            break;
+        }
+
+        if (step != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = std::string("fstenv/fnstenv step failed status=") + std::to_string(step) +
+                " exc=" + std::to_string(context.exception.code);
+            break;
+        }
+
+        std::uint32_t stored_control = 0;
+        std::uint32_t stored_status = 0;
+        std::uint32_t stored_tag = 0;
+        std::uint32_t stored_ip = 0;
+        std::uint32_t stored_opcode = 0;
+        std::uint32_t stored_dp = 0;
+        std::uint32_t stored_reserved = 0;
+        if (!read_internal_dword(memory_manager, guest_rsp + 0x40, stored_control) ||
+            !read_internal_dword(memory_manager, guest_rsp + 0x44, stored_status) ||
+            !read_internal_dword(memory_manager, guest_rsp + 0x48, stored_tag) ||
+            !read_internal_dword(memory_manager, guest_rsp + 0x4C, stored_ip) ||
+            !read_internal_dword(memory_manager, guest_rsp + 0x50, stored_opcode) ||
+            !read_internal_dword(memory_manager, guest_rsp + 0x54, stored_dp) ||
+            !read_internal_dword(memory_manager, guest_rsp + 0x58, stored_reserved)) {
+            failure.case_name = name;
+            failure.detail = "environment readback failed";
+            break;
+        }
+
+        if (stored_control != control_word || stored_status != status_word || stored_tag != tag_word ||
+            stored_ip != static_cast<std::uint32_t>(instruction_pointer & 0xFFFFFFFFu) ||
+            stored_opcode != (static_cast<std::uint32_t>(last_opcode) << 16) ||
+            stored_dp != static_cast<std::uint32_t>(data_pointer & 0xFFFFFFFFu) ||
+            stored_reserved != 0) {
+            failure.case_name = name;
+            failure.detail = "stored environment mismatch";
+            break;
+        }
+
+        if (context.x87_control_word != static_cast<std::uint16_t>(control_word | 0x003Fu)) {
+            failure.case_name = name;
+            failure.detail = "exception mask update mismatch";
+            break;
+        }
+        if (context.x87_pending_exception) {
+            failure.case_name = name;
+            failure.detail = "pending exception not cleared by masking";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    mm_destroy(&memory_manager);
+    return ok;
+}
+
+inline bool run_manual_x87_env_load_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint16_t control_word,
+    std::uint16_t status_word,
+    std::uint16_t tag_word,
+    std::uint16_t last_opcode,
+    std::uint64_t instruction_pointer,
+    std::uint64_t data_pointer,
+    bool expect_pending_after_load,
+    bool followup_should_mf,
+    Failure& failure) {
+    MEMORY_MANAGER memory_manager = {};
+    CPU_CONTEXT context = {};
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        std::vector<std::uint8_t> image = code;
+        image.push_back(0x90);
+        image.push_back(0x90);
+        if (!initialize_manual_cpu_context(context, memory_manager, image, initial, guest_rsp, failure, name)) {
+            break;
+        }
+
+        if (!write_internal_dword(memory_manager, guest_rsp + 0x40, control_word) ||
+            !write_internal_dword(memory_manager, guest_rsp + 0x44, status_word) ||
+            !write_internal_dword(memory_manager, guest_rsp + 0x48, tag_word) ||
+            !write_internal_dword(memory_manager, guest_rsp + 0x4C, static_cast<std::uint32_t>(instruction_pointer & 0xFFFFFFFFu)) ||
+            !write_internal_dword(memory_manager, guest_rsp + 0x50, static_cast<std::uint32_t>(last_opcode) << 16) ||
+            !write_internal_dword(memory_manager, guest_rsp + 0x54, static_cast<std::uint32_t>(data_pointer & 0xFFFFFFFFu)) ||
+            !write_internal_dword(memory_manager, guest_rsp + 0x58, 0)) {
+            failure.case_name = name;
+            failure.detail = "environment source write failed";
+            break;
+        }
+
+        context.x87_control_word = 0x037Fu;
+        context.x87_status_word = 0;
+        context.x87_tag_word = 0xFFFFu;
+        context.x87_last_opcode = 0;
+        context.x87_instruction_pointer = 0;
+        context.x87_data_pointer = 0;
+        context.x87_pending_exception = false;
+
+        const int load_step = cpu_step(&context);
+        if (load_step != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = "fldenv step failed";
+            break;
+        }
+        if (context.x87_control_word != control_word || context.x87_status_word != status_word ||
+            context.x87_tag_word != tag_word || context.x87_last_opcode != last_opcode ||
+            context.x87_instruction_pointer != static_cast<std::uint32_t>(instruction_pointer & 0xFFFFFFFFu) ||
+            context.x87_data_pointer != static_cast<std::uint32_t>(data_pointer & 0xFFFFFFFFu) ||
+            context.x87_pending_exception != expect_pending_after_load) {
+            failure.case_name = name;
+            failure.detail = "loaded environment mismatch";
+            break;
+        }
+
+        const int next_step = cpu_step(&context);
+        if (followup_should_mf) {
+            if (next_step != kCpuStepException || context.exception.code != CPUEAXH_EXCEPTION_MF) {
+                failure.case_name = name;
+                failure.detail = "expected delayed x87 #MF";
+                break;
+            }
+        }
+        else {
+            if (next_step != kCpuStepOk || cpu_has_exception(&context)) {
+                failure.case_name = name;
+                failure.detail = "follow-up fnstcw step failed";
+                break;
+            }
+
+            std::uint16_t stored_control = 0;
+            if (!read_internal_word(memory_manager, guest_rsp + 0x60, stored_control)) {
+                failure.case_name = name;
+                failure.detail = "follow-up readback failed";
+                break;
+            }
+            if (stored_control != control_word) {
+                failure.case_name = name;
+                failure.detail = "follow-up control word mismatch";
+                break;
+            }
+        }
+
+        ok = true;
+    } while (false);
+
+    mm_destroy(&memory_manager);
+    return ok;
+}
+
+inline bool run_manual_x87_internal_exception_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint64_t cr0_value,
+    bool pending_exception,
+    std::uint32_t expected_exception,
+    Failure& failure) {
+    MEMORY_MANAGER memory_manager = {};
+    CPU_CONTEXT context = {};
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        std::vector<std::uint8_t> image = code;
+        image.push_back(0x90);
+        image.push_back(0x90);
+        if (!initialize_manual_cpu_context(context, memory_manager, image, initial, guest_rsp, failure, name)) {
+            break;
+        }
+
+        const std::uint16_t initial_control = static_cast<std::uint16_t>(0x5100u | (seed & 0x00FFu));
+        const std::uint16_t initial_status = static_cast<std::uint16_t>(0xA200u | ((seed >> 8) & 0x00FFu));
+        context.control_regs[REG_CR0] = cr0_value;
+        context.x87_control_word = initial_control;
+        context.x87_status_word = initial_status;
+        context.x87_pending_exception = pending_exception;
+
+        const int status = cpu_step(&context);
+        if (status != kCpuStepException) {
+            failure.case_name = name;
+            failure.detail = "expected CPU_STEP_EXCEPTION";
+            break;
+        }
+        if (context.exception.code != expected_exception) {
+            failure.case_name = name;
+            failure.detail = "unexpected exception code";
+            break;
+        }
+        if (context.regs[REG_RAX] != initial.regs[0]) {
+            failure.case_name = name;
+            failure.detail = "rax changed unexpectedly";
+            break;
+        }
+        if ((context.rflags & kStatusMask) != (initial.rflags & kStatusMask)) {
+            failure.case_name = name;
+            failure.detail = "flags changed unexpectedly";
+            break;
+        }
+        if (context.x87_control_word != initial_control || context.x87_status_word != initial_status ||
+            context.x87_pending_exception != pending_exception) {
+            failure.case_name = name;
+            failure.detail = "x87 state changed unexpectedly";
+            break;
+        }
+
+        cpu_clear_exception(&context);
+        context.rip = kGuestCodeBase + static_cast<std::uint64_t>(code.size());
+
+        const int resume0 = cpu_step(&context);
+        if (resume0 != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = "resume step 0 failed";
+            break;
+        }
+        const int resume1 = cpu_step(&context);
+        if (resume1 != kCpuStepOk || cpu_has_exception(&context)) {
+            failure.case_name = name;
+            failure.detail = "resume step 1 failed";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    mm_destroy(&memory_manager);
+    return ok;
+}
+
+inline bool run_manual_x87_public_cr0_exception_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint64_t cr0_value,
+    std::uint32_t expected_exception,
+    Failure& failure) {
+    cpueaxh_engine* engine = nullptr;
+    cpueaxh_err err = cpueaxh_open(CPUEAXH_ARCH_X86, CPUEAXH_MODE_64, &engine);
+    if (err != CPUEAXH_ERR_OK) {
+        failure.case_name = name;
+        failure.detail = "cpueaxh_open failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        if (!initialize_manual_engine(engine, code, initial, guest_rsp, failure, name)) {
+            break;
+        }
+        if (!write_engine_reg(engine, CPUEAXH_X86_REG_CR0, cr0_value)) {
+            failure.case_name = name;
+            failure.detail = "cr0 write failed";
+            break;
+        }
+
+        err = cpueaxh_emu_start(engine, kGuestCodeBase, 0, 0, 1);
+        if (err != CPUEAXH_ERR_EXCEPTION) {
+            failure.case_name = name;
+            failure.detail = "expected CPUEAXH_ERR_EXCEPTION";
+            break;
+        }
+        if (cpueaxh_code_exception(engine) != expected_exception) {
+            failure.case_name = name;
+            failure.detail = "unexpected exception code";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    cpueaxh_close(engine);
+    return ok;
+}
+
 inline bool run_manual_exception_case(
     const std::string& name,
     const std::vector<std::uint8_t>& code,
@@ -2832,11 +3483,523 @@ inline bool run_manual_exception_case_public(
     return ok;
 }
 
+struct ManualInsEscapeState {
+    std::vector<std::uint32_t> values;
+    std::uint16_t expected_port = 0;
+};
+
+inline void write_manual_ins_index(cpueaxh_x86_context* context, int address_size, std::uint64_t value) {
+    if (address_size == 32) {
+        context->regs[CPUEAXH_X86_REG_RDI] = static_cast<std::uint32_t>(value);
+        return;
+    }
+    context->regs[CPUEAXH_X86_REG_RDI] = value;
+}
+
+inline void write_manual_ins_count(cpueaxh_x86_context* context, int address_size, std::uint64_t value) {
+    if (address_size == 32) {
+        context->regs[CPUEAXH_X86_REG_RCX] = static_cast<std::uint32_t>(value);
+        return;
+    }
+    context->regs[CPUEAXH_X86_REG_RCX] = value;
+}
+
+inline cpueaxh_err write_manual_ins_value(cpueaxh_engine* engine, std::uint64_t address, int operand_bytes, std::uint32_t value) {
+    std::uint8_t buffer[4] = {};
+    for (int index = 0; index < operand_bytes; ++index) {
+        buffer[index] = static_cast<std::uint8_t>((value >> (index * 8)) & 0xFFu);
+    }
+    return cpueaxh_mem_write(engine, address, buffer, static_cast<std::size_t>(operand_bytes));
+}
+
+inline cpueaxh_err manual_ins_escape_callback(
+    cpueaxh_engine* engine,
+    cpueaxh_x86_context* context,
+    const std::uint8_t* instruction,
+    void* user_data) {
+    ManualInsEscapeState* state = reinterpret_cast<ManualInsEscapeState*>(user_data);
+    if (!engine || !context || !instruction || !state) {
+        return CPUEAXH_ERR_ARG;
+    }
+
+    std::size_t offset = 0;
+    bool operand_size_override = false;
+    bool address_size_override = false;
+    bool has_lock_prefix = false;
+    std::uint8_t rep_prefix = 0;
+    while (true) {
+        const std::uint8_t prefix = instruction[offset];
+        if (prefix == 0x66) {
+            operand_size_override = true;
+            ++offset;
+        }
+        else if (prefix == 0x67) {
+            address_size_override = true;
+            ++offset;
+        }
+        else if (prefix == 0xF0) {
+            has_lock_prefix = true;
+            ++offset;
+        }
+        else if (prefix == 0xF2 || prefix == 0xF3) {
+            rep_prefix = prefix;
+            ++offset;
+        }
+        else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
+                 prefix == 0x64 || prefix == 0x65 ||
+                 (prefix >= 0x40 && prefix <= 0x4F)) {
+            ++offset;
+        }
+        else {
+            break;
+        }
+    }
+
+    const std::uint8_t opcode = instruction[offset];
+    if (opcode != 0x6C && opcode != 0x6D) {
+        return CPUEAXH_ERR_ARG;
+    }
+    if (has_lock_prefix) {
+        context->code_exception = CPUEAXH_EXCEPTION_UD;
+        context->error_code_exception = 0;
+        return CPUEAXH_ERR_OK;
+    }
+
+    const int operand_bytes = (opcode == 0x6C) ? 1 : (operand_size_override ? 2 : 4);
+    const int address_size = address_size_override ? 32 : 64;
+    const std::uint16_t port = static_cast<std::uint16_t>(context->regs[CPUEAXH_X86_REG_RDX] & 0xFFFFu);
+    if (port != state->expected_port) {
+        return CPUEAXH_ERR_ARG;
+    }
+
+    std::uint64_t count = 1;
+    if (rep_prefix == 0xF2 || rep_prefix == 0xF3) {
+        count = (address_size == 32)
+            ? static_cast<std::uint32_t>(context->regs[CPUEAXH_X86_REG_RCX] & 0xFFFFFFFFu)
+            : context->regs[CPUEAXH_X86_REG_RCX];
+    }
+
+    std::uint64_t index = (address_size == 32)
+        ? static_cast<std::uint32_t>(context->regs[CPUEAXH_X86_REG_RDI] & 0xFFFFFFFFu)
+        : context->regs[CPUEAXH_X86_REG_RDI];
+    const std::uint64_t step = static_cast<std::uint64_t>(operand_bytes);
+    const bool decrement = (context->rflags & RFLAGS_DF) != 0;
+
+    for (std::uint64_t iteration = 0; iteration < count; ++iteration) {
+        if (iteration >= state->values.size()) {
+            return CPUEAXH_ERR_ARG;
+        }
+        const cpueaxh_err err = write_manual_ins_value(engine, index, operand_bytes, state->values[static_cast<std::size_t>(iteration)]);
+        if (err != CPUEAXH_ERR_OK) {
+            return err;
+        }
+        index = decrement ? (index - step) : (index + step);
+    }
+
+    write_manual_ins_index(context, address_size, index);
+    if (rep_prefix == 0xF2 || rep_prefix == 0xF3) {
+        write_manual_ins_count(context, address_size, 0);
+    }
+    return CPUEAXH_ERR_OK;
+}
+
+inline bool run_public_ins_escape_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    std::uint16_t port,
+    std::uint64_t initial_rdi,
+    std::uint64_t initial_rcx,
+    std::uint64_t initial_rflags,
+    const std::vector<std::uint32_t>& values,
+    std::uint64_t verify_address,
+    const std::vector<std::uint8_t>& expected_bytes,
+    std::uint64_t expected_rdi,
+    std::uint64_t expected_rcx,
+    Failure& failure) {
+    cpueaxh_engine* engine = nullptr;
+    cpueaxh_err err = cpueaxh_open(CPUEAXH_ARCH_X86, CPUEAXH_MODE_64, &engine);
+    if (err != CPUEAXH_ERR_OK) {
+        failure.case_name = name;
+        failure.detail = "cpueaxh_open failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        if (!initialize_manual_engine(engine, code, initial, guest_rsp, failure, name)) {
+            break;
+        }
+        if (!write_engine_reg16(engine, CPUEAXH_X86_REG_RDX, port) ||
+            !write_engine_reg(engine, CPUEAXH_X86_REG_RDI, initial_rdi) ||
+            !write_engine_reg(engine, CPUEAXH_X86_REG_RCX, initial_rcx) ||
+            !write_engine_reg(engine, CPUEAXH_X86_REG_EFLAGS, initial_rflags)) {
+            failure.case_name = name;
+            failure.detail = "register override failed";
+            break;
+        }
+
+        ManualInsEscapeState state{};
+        state.values = values;
+        state.expected_port = port;
+        cpueaxh_escape_handle handle = 0;
+        err = cpueaxh_escape_add(
+            engine,
+            &handle,
+            CPUEAXH_ESCAPE_INSN_INS,
+            reinterpret_cast<void*>(manual_ins_escape_callback),
+            &state,
+            kGuestCodeBase,
+            kGuestCodeBase + static_cast<std::uint64_t>(code.size()) - 1);
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = "cpueaxh_escape_add failed";
+            break;
+        }
+
+        err = cpueaxh_emu_start(engine, kGuestCodeBase, 0, 0, 1);
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = std::string("guest execution failed: ") + std::to_string(err) + " exc=" + std::to_string(cpueaxh_code_exception(engine));
+            break;
+        }
+
+        std::vector<std::uint8_t> actual_bytes(expected_bytes.size(), 0);
+        err = cpueaxh_mem_read(engine, verify_address, actual_bytes.data(), actual_bytes.size());
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = "cpueaxh_mem_read failed";
+            break;
+        }
+        if (actual_bytes != expected_bytes) {
+            failure.case_name = name;
+            failure.detail = "stored bytes mismatch";
+            break;
+        }
+
+        std::uint64_t actual_rdi = 0;
+        std::uint64_t actual_rcx = 0;
+        std::uint64_t actual_rip = 0;
+        if (!read_engine_reg(engine, CPUEAXH_X86_REG_RDI, actual_rdi) ||
+            !read_engine_reg(engine, CPUEAXH_X86_REG_RCX, actual_rcx) ||
+            !read_engine_reg(engine, CPUEAXH_X86_REG_RIP, actual_rip)) {
+            failure.case_name = name;
+            failure.detail = "register readback failed";
+            break;
+        }
+        if (actual_rdi != expected_rdi) {
+            failure.case_name = name;
+            failure.detail = "rdi mismatch";
+            break;
+        }
+        if (actual_rcx != expected_rcx) {
+            failure.case_name = name;
+            failure.detail = "rcx mismatch";
+            break;
+        }
+        if (actual_rip != kGuestCodeBase + static_cast<std::uint64_t>(code.size())) {
+            failure.case_name = name;
+            failure.detail = "rip mismatch";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    cpueaxh_close(engine);
+    return ok;
+}
+
+inline cpueaxh_x86_xmm apply_expected_pinsrw_xmm(const cpueaxh_x86_xmm& input, std::uint16_t value, std::uint8_t imm8) {
+    cpueaxh_x86_xmm result = input;
+    const std::uint64_t shift = static_cast<std::uint64_t>(imm8 & 0x07u) * 16u;
+    if (shift < 64u) {
+        result.low = (result.low & ~(0xFFFFull << shift)) | (static_cast<std::uint64_t>(value) << shift);
+    }
+    else {
+        const std::uint64_t high_shift = shift - 64u;
+        result.high = (result.high & ~(0xFFFFull << high_shift)) | (static_cast<std::uint64_t>(value) << high_shift);
+    }
+    return result;
+}
+
+inline std::uint64_t apply_expected_pinsrw_mmx(std::uint64_t input, std::uint16_t value, std::uint8_t imm8) {
+    const std::uint64_t shift = static_cast<std::uint64_t>(imm8 & 0x03u) * 16u;
+    return (input & ~(0xFFFFull << shift)) | (static_cast<std::uint64_t>(value) << shift);
+}
+
+inline std::uint64_t popcnt_source_mask(int operand_size) {
+    switch (operand_size) {
+    case 16:
+        return 0xFFFFull;
+    case 32:
+        return 0xFFFFFFFFull;
+    default:
+        return 0xFFFFFFFFFFFFFFFFull;
+    }
+}
+
+inline std::uint64_t count_bits_reference(std::uint64_t value, int operand_size) {
+    std::uint64_t count = 0;
+    const std::uint64_t masked = value & popcnt_source_mask(operand_size);
+    for (int bit = 0; bit < operand_size; ++bit) {
+        count += (masked >> bit) & 1ull;
+    }
+    return count;
+}
+
+inline std::uint64_t apply_expected_popcnt_dest(std::uint64_t initial_dest, std::uint64_t result, int operand_size) {
+    switch (operand_size) {
+    case 16:
+        return (initial_dest & ~0xFFFFull) | (result & 0xFFFFull);
+    case 32:
+        return static_cast<std::uint32_t>(result);
+    default:
+        return result;
+    }
+}
+
+inline bool run_public_popcnt_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    int dest_reg,
+    int source_reg,
+    std::uint64_t source_value,
+    int operand_size,
+    std::uint64_t source_mem_address,
+    Failure& failure) {
+    cpueaxh_engine* engine = nullptr;
+    cpueaxh_err err = cpueaxh_open(CPUEAXH_ARCH_X86, CPUEAXH_MODE_64, &engine);
+    if (err != CPUEAXH_ERR_OK) {
+        failure.case_name = name;
+        failure.detail = "cpueaxh_open failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        if (!initialize_manual_engine(engine, code, initial, guest_rsp, failure, name)) {
+            break;
+        }
+
+        if (source_reg >= 0) {
+            if (!write_engine_reg(engine, source_reg, source_value)) {
+                failure.case_name = name;
+                failure.detail = "source register initialization failed";
+                break;
+            }
+        }
+        else {
+            std::uint8_t buffer[8] = {};
+            for (int index = 0; index < (operand_size / 8); ++index) {
+                buffer[index] = static_cast<std::uint8_t>((source_value >> (index * 8)) & 0xFFu);
+            }
+            if (cpueaxh_mem_write(engine, source_mem_address, buffer, static_cast<std::size_t>(operand_size / 8)) != CPUEAXH_ERR_OK) {
+                failure.case_name = name;
+                failure.detail = "source memory initialization failed";
+                break;
+            }
+        }
+
+        std::uint64_t initial_dest = 0;
+        if (!read_engine_reg(engine, dest_reg, initial_dest)) {
+            failure.case_name = name;
+            failure.detail = "destination pre-read failed";
+            break;
+        }
+
+        err = cpueaxh_emu_start(engine, kGuestCodeBase, 0, 0, 1);
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = std::string("guest execution failed: ") + std::to_string(err) + " exc=" + std::to_string(cpueaxh_code_exception(engine));
+            break;
+        }
+
+        const std::uint64_t masked_source = source_value & popcnt_source_mask(operand_size);
+        const std::uint64_t expected_result = count_bits_reference(source_value, operand_size);
+        const std::uint64_t expected_dest = apply_expected_popcnt_dest(initial_dest, expected_result, operand_size);
+        const std::uint64_t expected_flags = (initial.rflags & ~kStatusMask) | ((masked_source == 0) ? kFlagZF : 0ull);
+
+        std::uint64_t actual_dest = 0;
+        if (!read_engine_reg(engine, dest_reg, actual_dest)) {
+            failure.case_name = name;
+            failure.detail = "destination readback failed";
+            break;
+        }
+        if (actual_dest != expected_dest) {
+            failure.case_name = name;
+            failure.detail = "destination result mismatch";
+            break;
+        }
+
+        std::uint64_t actual_flags = 0;
+        if (!read_engine_reg(engine, CPUEAXH_X86_REG_EFLAGS, actual_flags)) {
+            failure.case_name = name;
+            failure.detail = "flags readback failed";
+            break;
+        }
+        if ((actual_flags & kStatusMask) != (expected_flags & kStatusMask)) {
+            failure.case_name = name;
+            failure.detail = "flags mismatch";
+            break;
+        }
+
+        if (source_reg >= 0) {
+            std::uint64_t actual_source = 0;
+            if (!read_engine_reg(engine, source_reg, actual_source)) {
+                failure.case_name = name;
+                failure.detail = "source readback failed";
+                break;
+            }
+            if (actual_source != source_value) {
+                failure.case_name = name;
+                failure.detail = "source register changed unexpectedly";
+                break;
+            }
+        }
+
+        ok = true;
+    } while (false);
+
+    cpueaxh_close(engine);
+    return ok;
+}
+
+inline bool run_public_pinsrw_mmx_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    int mm_reg,
+    std::uint64_t initial_mm,
+    int source_reg,
+    std::uint64_t source_value,
+    std::uint64_t expected_mm,
+    Failure& failure) {
+    cpueaxh_engine* engine = nullptr;
+    cpueaxh_err err = cpueaxh_open(CPUEAXH_ARCH_X86, CPUEAXH_MODE_64, &engine);
+    if (err != CPUEAXH_ERR_OK) {
+        failure.case_name = name;
+        failure.detail = "cpueaxh_open failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        if (!initialize_manual_engine(engine, code, initial, guest_rsp, failure, name)) {
+            break;
+        }
+        if (!write_engine_reg(engine, mm_reg, initial_mm) ||
+            !write_engine_reg(engine, source_reg, source_value)) {
+            failure.case_name = name;
+            failure.detail = "register initialization failed";
+            break;
+        }
+
+        err = cpueaxh_emu_start(engine, kGuestCodeBase, 0, 0, 1);
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = std::string("guest execution failed: ") + std::to_string(err) + " exc=" + std::to_string(cpueaxh_code_exception(engine));
+            break;
+        }
+
+        std::uint64_t actual_mm = 0;
+        if (!read_engine_reg(engine, mm_reg, actual_mm)) {
+            failure.case_name = name;
+            failure.detail = "mm readback failed";
+            break;
+        }
+        if (actual_mm != expected_mm) {
+            failure.case_name = name;
+            failure.detail = "mm result mismatch";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    cpueaxh_close(engine);
+    return ok;
+}
+
+inline bool run_public_pinsrw_xmm_case(
+    const std::string& name,
+    const std::vector<std::uint8_t>& code,
+    std::uint64_t seed,
+    int dest_reg,
+    const cpueaxh_x86_ymm& dest_initial,
+    int source_reg,
+    std::uint64_t source_value,
+    int source1_reg,
+    const cpueaxh_x86_ymm* source1_initial,
+    const cpueaxh_x86_xmm& expected_lower,
+    const cpueaxh_x86_xmm& expected_upper,
+    Failure& failure) {
+    cpueaxh_engine* engine = nullptr;
+    cpueaxh_err err = cpueaxh_open(CPUEAXH_ARCH_X86, CPUEAXH_MODE_64, &engine);
+    if (err != CPUEAXH_ERR_OK) {
+        failure.case_name = name;
+        failure.detail = "cpueaxh_open failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        cpueaxh_x86_context initial = make_initial_context(seed);
+        const std::uint64_t guest_rsp = kGuestStackBase + kInitialRspOffset;
+        if (!initialize_manual_engine(engine, code, initial, guest_rsp, failure, name)) {
+            break;
+        }
+        if (!write_engine_ymm(engine, dest_reg, dest_initial) ||
+            !write_engine_reg(engine, source_reg, source_value)) {
+            failure.case_name = name;
+            failure.detail = "register initialization failed";
+            break;
+        }
+        if (source1_initial && (!write_engine_ymm(engine, source1_reg, *source1_initial))) {
+            failure.case_name = name;
+            failure.detail = "source1 initialization failed";
+            break;
+        }
+
+        err = cpueaxh_emu_start(engine, kGuestCodeBase, 0, 0, 1);
+        if (err != CPUEAXH_ERR_OK) {
+            failure.case_name = name;
+            failure.detail = std::string("guest execution failed: ") + std::to_string(err) + " exc=" + std::to_string(cpueaxh_code_exception(engine));
+            break;
+        }
+
+        cpueaxh_x86_ymm actual{};
+        if (!read_engine_ymm(engine, dest_reg, actual)) {
+            failure.case_name = name;
+            failure.detail = "ymm readback failed";
+            break;
+        }
+        if (!equal_xmm(actual.lower, expected_lower) || !equal_xmm(actual.upper, expected_upper)) {
+            failure.case_name = name;
+            failure.detail = "xmm result mismatch";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    cpueaxh_close(engine);
+    return ok;
+}
+
 inline bool emit_host_mov_reg_imm64(std::vector<std::uint8_t>& code, std::uint8_t reg_low3, std::uint64_t imm);
 inline bool run_host_stack_roundtrip_case(const std::string& name, std::uint64_t seed, Failure& failure);
 
 inline std::uint64_t manual_special_case_count(const HostFeatures& features) {
-    return kSeedCount * (features.avx ? 10ull : 9ull) + kExceptionSeedCount * 8ull + kHostStackSeedCount + kContextApiSeedCount;
+    const std::uint64_t per_seed_special = (features.avx ? 29ull : 28ull) + (features.popcnt ? 3ull : 0ull);
+    return kSeedCount * per_seed_special + kExceptionSeedCount * 23ull + kHostStackSeedCount + kContextApiSeedCount;
 }
 
 inline bool run_manual_special_tests(const HostFeatures& features, std::uint64_t& executed, std::uint64_t total) {
@@ -2850,10 +4013,40 @@ inline bool run_manual_special_tests(const HostFeatures& features, std::uint64_t
     const std::vector<std::uint8_t> invalid_rdssp_lock = { 0xF0, 0xF3, 0x48, 0x0F, 0x1E, 0xC8 };
     const std::vector<std::uint8_t> invalid_rdpid_no_f3 = { 0x48, 0x0F, 0xC7, 0xF8 };
     const std::vector<std::uint8_t> invalid_rdpid_with_66 = { 0x66, 0xF3, 0x48, 0x0F, 0xC7, 0xF8 };
+    const std::vector<std::uint8_t> fninit = { 0xDB, 0xE3 };
+    const std::vector<std::uint8_t> fnstsw_ax_only = { 0xDF, 0xE0 };
+    const std::vector<std::uint8_t> finit_only = { 0x9B, 0xDB, 0xE3 };
+    const std::vector<std::uint8_t> fstsw_ax_only = { 0x9B, 0xDF, 0xE0 };
+    const std::vector<std::uint8_t> fldcw_then_fnstcw = { 0xD9, 0x6C, 0x24, 0x40, 0xD9, 0x7C, 0x24, 0x42 };
+    const std::vector<std::uint8_t> fldcw_then_fstcw = { 0xD9, 0x6C, 0x24, 0x40, 0x9B, 0xD9, 0x7C, 0x24, 0x42 };
+    const std::vector<std::uint8_t> fldcw_only = { 0xD9, 0x6C, 0x24, 0x40 };
+    const std::vector<std::uint8_t> fldenv_then_fnstcw = { 0xD9, 0x64, 0x24, 0x40, 0xD9, 0x7C, 0x24, 0x60 };
+    const std::vector<std::uint8_t> fldenv_then_fstcw = { 0xD9, 0x64, 0x24, 0x40, 0x9B, 0xD9, 0x7C, 0x24, 0x60 };
+    const std::vector<std::uint8_t> fldenv_only = { 0xD9, 0x64, 0x24, 0x40 };
+    const std::vector<std::uint8_t> pinsrw_mmx_reg = { 0x0F, 0xC4, 0xC8, 0x02 };
+    const std::vector<std::uint8_t> pinsrw_xmm_reg = { 0x66, 0x44, 0x0F, 0xC4, 0xC8, 0x05 };
+    const std::vector<std::uint8_t> pinsrw_xmm0_ecx = { 0x66, 0x0F, 0xC4, 0xC1, 0x04 };
+    const std::vector<std::uint8_t> vpinsrw_xmm_reg = { 0xC4, 0xE1, 0x69, 0xC4, 0xC8, 0x05 };
+    const std::vector<std::uint8_t> evex_vpinsrw_xmm_reg = { 0x62, 0xF1, 0x6D, 0x08, 0xC4, 0xC8, 0x05 };
+    const std::vector<std::uint8_t> popcnt_ax_mem = { 0x66, 0xF3, 0x0F, 0xB8, 0x44, 0x24, 0x40 };
+    const std::vector<std::uint8_t> popcnt_eax_edx = { 0xF3, 0x0F, 0xB8, 0xC2 };
+    const std::vector<std::uint8_t> popcnt_rax_rdx = { 0xF3, 0x48, 0x0F, 0xB8, 0xC2 };
+    const std::vector<std::uint8_t> rep_insb_edi = { 0xF3, 0x67, 0x6C };
+    const std::vector<std::uint8_t> insw_df_edi = { 0x67, 0x66, 0x6D };
+    const std::vector<std::uint8_t> insd_rdi = { 0x6D };
+    const std::vector<std::uint8_t> fnstenv_rsp = { 0xD9, 0x74, 0x24, 0x40 };
+    const std::vector<std::uint8_t> fstenv_rsp = { 0x9B, 0xD9, 0x74, 0x24, 0x40 };
     const std::vector<std::uint8_t> fnstcw_rsp = { 0xD9, 0x7C, 0x24, 0x40, 0xC3 };
     const std::vector<std::uint8_t> fstcw_rsp = { 0x9B, 0xD9, 0x7C, 0x24, 0x40, 0xC3 };
+    const std::vector<std::uint8_t> fninit_reset = { 0xDB, 0xE3, 0xD9, 0x7C, 0x24, 0x40, 0xDD, 0x7C, 0x24, 0x42 };
+    const std::vector<std::uint8_t> finit_reset = { 0x9B, 0xDB, 0xE3, 0xD9, 0x7C, 0x24, 0x40, 0xDD, 0x7C, 0x24, 0x42 };
+    const std::vector<std::uint8_t> fnstsw_rsp = { 0xDD, 0x7C, 0x24, 0x40 };
+    const std::vector<std::uint8_t> fstsw_rsp = { 0x9B, 0xDD, 0x7C, 0x24, 0x40 };
+    const std::vector<std::uint8_t> fnstsw_ax = { 0xDF, 0xE0 };
+    const std::vector<std::uint8_t> fstsw_ax = { 0x9B, 0xDF, 0xE0 };
     const std::vector<std::uint8_t> stmxcsr_rsp = { 0x0F, 0xAE, 0x5C, 0x24, 0x40, 0xC3 };
     const std::vector<std::uint8_t> vstmxcsr_rsp = { 0xC5, 0xF8, 0xAE, 0x5C, 0x24, 0x40, 0xC3 };
+    const std::vector<std::uint8_t> invalid_popcnt_lock = { 0xF0, 0xF3, 0x48, 0x0F, 0xB8, 0xC2 };
 
     auto tick = [&](bool result, const Failure& failure) -> bool {
         if (!result) {
@@ -2896,9 +4089,208 @@ inline bool run_manual_special_tests(const HostFeatures& features, std::uint64_t
         const std::uint64_t seed_fstcw = seeded(seed_index, 0xE015);
         if (!tick(run_manual_store_case("fstcw:" + std::to_string(seed_fstcw), fstcw_rsp, seed_fstcw, static_cast<std::uint32_t>(kInitialMxcsr), 0x40, 2, kInitialX87ControlWord, failure), failure)) return false;
 
+        const std::uint64_t seed_fninit = seeded(seed_index, 0xE018);
+        if (!tick(run_manual_x87_reset_case("fninit:" + std::to_string(seed_fninit), fninit_reset, seed_fninit, failure), failure)) return false;
+
+        const std::uint64_t seed_finit = seeded(seed_index, 0xE019);
+        if (!tick(run_manual_x87_reset_case("finit:" + std::to_string(seed_finit), finit_reset, seed_finit, failure), failure)) return false;
+
+        const std::uint64_t seed_fnstsw_mem = seeded(seed_index, 0xE01A);
+        const std::uint16_t fnstsw_mem_value = static_cast<std::uint16_t>(seeded(seed_fnstsw_mem, 0x94) & 0xFFFFu);
+        if (!tick(run_manual_x87_status_case("fnstsw_mem:" + std::to_string(seed_fnstsw_mem), fnstsw_rsp, seed_fnstsw_mem, fnstsw_mem_value, false, 0x40, failure), failure)) return false;
+
+        const std::uint64_t seed_fstsw_mem = seeded(seed_index, 0xE01B);
+        const std::uint16_t fstsw_mem_value = static_cast<std::uint16_t>(seeded(seed_fstsw_mem, 0x95) & 0xFFFFu);
+        if (!tick(run_manual_x87_status_case("fstsw_mem:" + std::to_string(seed_fstsw_mem), fstsw_rsp, seed_fstsw_mem, fstsw_mem_value, false, 0x40, failure), failure)) return false;
+
+        const std::uint64_t seed_fnstsw_ax = seeded(seed_index, 0xE01C);
+        const std::uint16_t fnstsw_ax_value = static_cast<std::uint16_t>(seeded(seed_fnstsw_ax, 0x96) & 0xFFFFu);
+        if (!tick(run_manual_x87_status_case("fnstsw_ax:" + std::to_string(seed_fnstsw_ax), fnstsw_ax, seed_fnstsw_ax, fnstsw_ax_value, true, 0, failure), failure)) return false;
+
+        const std::uint64_t seed_fstsw_ax = seeded(seed_index, 0xE01D);
+        const std::uint16_t fstsw_ax_value = static_cast<std::uint16_t>(seeded(seed_fstsw_ax, 0x97) & 0xFFFFu);
+        if (!tick(run_manual_x87_status_case("fstsw_ax:" + std::to_string(seed_fstsw_ax), fstsw_ax, seed_fstsw_ax, fstsw_ax_value, true, 0, failure), failure)) return false;
+
+        const std::uint64_t seed_fldcw = seeded(seed_index, 0xE01E);
+        const std::uint16_t fldcw_value = static_cast<std::uint16_t>(seeded(seed_fldcw, 0x98) & 0xFFFFu);
+        if (!tick(run_manual_x87_fldcw_load_case("fldcw:" + std::to_string(seed_fldcw), fldcw_then_fnstcw, seed_fldcw, fldcw_value, 0, false, failure), failure)) return false;
+
+        const std::uint64_t seed_fldcw_unmask = seeded(seed_index, 0xE01F);
+        if (!tick(run_manual_x87_fldcw_unmask_case("fldcw_unmask:" + std::to_string(seed_fldcw_unmask), fldcw_then_fstcw, seed_fldcw_unmask, 0x0000u, 0x0001u, failure), failure)) return false;
+
+        const std::uint64_t seed_fnstenv = seeded(seed_index, 0xE026);
+        if (!tick(run_manual_x87_env_store_case(
+            "fnstenv:" + std::to_string(seed_fnstenv),
+            fnstenv_rsp,
+            seed_fnstenv,
+            static_cast<std::uint16_t>(seeded(seed_fnstenv, 0x9A) & 0xFFFFu),
+            static_cast<std::uint16_t>(seeded(seed_fnstenv, 0x9B) & 0xFFFFu),
+            static_cast<std::uint16_t>(seeded(seed_fnstenv, 0x9C) & 0xFFFFu),
+            static_cast<std::uint16_t>(seeded(seed_fnstenv, 0x9D) & 0xFFFFu),
+            seeded(seed_fnstenv, 0x9E),
+            seeded(seed_fnstenv, 0x9F),
+            false,
+            false,
+            failure), failure)) return false;
+
+        const std::uint64_t seed_fstenv = seeded(seed_index, 0xE027);
+        if (!tick(run_manual_x87_env_store_case(
+            "fstenv:" + std::to_string(seed_fstenv),
+            fstenv_rsp,
+            seed_fstenv,
+            static_cast<std::uint16_t>(seeded(seed_fstenv, 0xA0) & 0xFFFFu),
+            static_cast<std::uint16_t>(seeded(seed_fstenv, 0xA1) & 0xFFFFu),
+            static_cast<std::uint16_t>(seeded(seed_fstenv, 0xA2) & 0xFFFFu),
+            static_cast<std::uint16_t>(seeded(seed_fstenv, 0xA3) & 0xFFFFu),
+            seeded(seed_fstenv, 0xA4),
+            seeded(seed_fstenv, 0xA5),
+            false,
+            true,
+            failure), failure)) return false;
+
+        const std::uint64_t seed_fldenv = seeded(seed_index, 0xE029);
+        const std::uint16_t fldenv_control_word = static_cast<std::uint16_t>(seeded(seed_fldenv, 0xA6) & 0xFFFFu);
+        const std::uint16_t fldenv_status_word = static_cast<std::uint16_t>(seeded(seed_fldenv, 0xA7) & 0xFFFFu);
+        if (!tick(run_manual_x87_env_load_case(
+            "fldenv:" + std::to_string(seed_fldenv),
+            fldenv_then_fnstcw,
+            seed_fldenv,
+            fldenv_control_word,
+            fldenv_status_word,
+            static_cast<std::uint16_t>(seeded(seed_fldenv, 0xA8) & 0xFFFFu),
+            static_cast<std::uint16_t>(seeded(seed_fldenv, 0xA9) & 0xFFFFu),
+            seeded(seed_fldenv, 0xAA),
+            seeded(seed_fldenv, 0xAB),
+            expected_x87_pending(fldenv_control_word, fldenv_status_word),
+            false,
+            failure), failure)) return false;
+
+        const std::uint64_t seed_fldenv_unmask = seeded(seed_index, 0xE02A);
+        if (!tick(run_manual_x87_env_load_case(
+            "fldenv_unmask:" + std::to_string(seed_fldenv_unmask),
+            fldenv_then_fstcw,
+            seed_fldenv_unmask,
+            0x0000u,
+            0x0001u,
+            0xFFFFu,
+            0,
+            0,
+            0,
+            true,
+            true,
+            failure), failure)) return false;
+
         const std::uint64_t seed_stmxcsr = seeded(seed_index, 0xE016);
         const std::uint32_t mxcsr_value = static_cast<std::uint32_t>(0x1F80u | (seeded(seed_stmxcsr, 0x92) & 0x1F3Fu));
         if (!tick(run_manual_store_case("stmxcsr:" + std::to_string(seed_stmxcsr), stmxcsr_rsp, seed_stmxcsr, mxcsr_value, 0x40, 4, mxcsr_value, failure), failure)) return false;
+
+        const std::uint64_t seed_pinsrw_mmx = seeded(seed_index, 0xE018);
+        const std::uint64_t pinsrw_mmx_initial = seeded(seed_pinsrw_mmx, 0xB0);
+        const std::uint16_t pinsrw_mmx_source = static_cast<std::uint16_t>(seeded(seed_pinsrw_mmx, 0xB1) & 0xFFFFu);
+        if (!tick(run_public_pinsrw_mmx_case(
+            "pinsrw_mmx:" + std::to_string(seed_pinsrw_mmx),
+            pinsrw_mmx_reg,
+            seed_pinsrw_mmx,
+            CPUEAXH_X86_REG_MM1,
+            pinsrw_mmx_initial,
+            CPUEAXH_X86_REG_RAX,
+            pinsrw_mmx_source,
+            apply_expected_pinsrw_mmx(pinsrw_mmx_initial, pinsrw_mmx_source, 0x02),
+            failure), failure)) return false;
+
+        const std::uint64_t seed_pinsrw_xmm = seeded(seed_index, 0xE019);
+        const cpueaxh_x86_ymm pinsrw_xmm_initial = make_seeded_ymm(seed_pinsrw_xmm, 0xB2);
+        const std::uint16_t pinsrw_xmm_source = static_cast<std::uint16_t>(seeded(seed_pinsrw_xmm, 0xB3) & 0xFFFFu);
+        if (!tick(run_public_pinsrw_xmm_case(
+            "pinsrw_xmm:" + std::to_string(seed_pinsrw_xmm),
+            pinsrw_xmm0_ecx,
+            seed_pinsrw_xmm,
+            CPUEAXH_X86_REG_YMM0,
+            pinsrw_xmm_initial,
+            CPUEAXH_X86_REG_RCX,
+            pinsrw_xmm_source,
+            0,
+            nullptr,
+            apply_expected_pinsrw_xmm(pinsrw_xmm_initial.lower, pinsrw_xmm_source, 0x04),
+            pinsrw_xmm_initial.upper,
+            failure), failure)) return false;
+
+        const std::uint64_t seed_vpinsrw = seeded(seed_index, 0xE01A);
+        const cpueaxh_x86_ymm vpinsrw_dest_initial = make_seeded_ymm(seed_vpinsrw, 0xB4);
+        const cpueaxh_x86_ymm vpinsrw_src1_initial = make_seeded_ymm(seed_vpinsrw, 0xB8);
+        const std::uint16_t vpinsrw_source = static_cast<std::uint16_t>(seeded(seed_vpinsrw, 0xBC) & 0xFFFFu);
+        if (!tick(run_public_pinsrw_xmm_case(
+            "vpinsrw_xmm:" + std::to_string(seed_vpinsrw),
+            vpinsrw_xmm_reg,
+            seed_vpinsrw,
+            CPUEAXH_X86_REG_YMM1,
+            vpinsrw_dest_initial,
+            CPUEAXH_X86_REG_RAX,
+            vpinsrw_source,
+            CPUEAXH_X86_REG_YMM2,
+            &vpinsrw_src1_initial,
+            apply_expected_pinsrw_xmm(vpinsrw_src1_initial.lower, vpinsrw_source, 0x05),
+            cpueaxh_x86_xmm{},
+            failure), failure)) return false;
+
+        const std::uint64_t seed_evex_vpinsrw = seeded(seed_index, 0xE01B);
+        const cpueaxh_x86_ymm evex_vpinsrw_dest_initial = make_seeded_ymm(seed_evex_vpinsrw, 0xC0);
+        const cpueaxh_x86_ymm evex_vpinsrw_src1_initial = make_seeded_ymm(seed_evex_vpinsrw, 0xC4);
+        const std::uint16_t evex_vpinsrw_source = static_cast<std::uint16_t>(seeded(seed_evex_vpinsrw, 0xC8) & 0xFFFFu);
+        if (!tick(run_public_pinsrw_xmm_case(
+            "evex_vpinsrw_xmm:" + std::to_string(seed_evex_vpinsrw),
+            evex_vpinsrw_xmm_reg,
+            seed_evex_vpinsrw,
+            CPUEAXH_X86_REG_YMM1,
+            evex_vpinsrw_dest_initial,
+            CPUEAXH_X86_REG_RAX,
+            evex_vpinsrw_source,
+            CPUEAXH_X86_REG_YMM2,
+            &evex_vpinsrw_src1_initial,
+            apply_expected_pinsrw_xmm(evex_vpinsrw_src1_initial.lower, evex_vpinsrw_source, 0x05),
+            cpueaxh_x86_xmm{},
+            failure), failure)) return false;
+
+        if (features.popcnt) {
+            const std::uint64_t seed_popcnt16 = seeded(seed_index, 0xE030);
+            const std::uint16_t popcnt16_source = static_cast<std::uint16_t>(seeded(seed_popcnt16, 0xDA) & 0xFFFFu);
+            if (!tick(run_public_popcnt_case(
+                "popcnt_ax_mem:" + std::to_string(seed_popcnt16),
+                popcnt_ax_mem,
+                seed_popcnt16,
+                CPUEAXH_X86_REG_RAX,
+                -1,
+                popcnt16_source,
+                16,
+                kGuestStackBase + kInitialRspOffset + 0x40,
+                failure), failure)) return false;
+
+            const std::uint64_t seed_popcnt32 = seeded(seed_index, 0xE031);
+            const std::uint32_t popcnt32_source = static_cast<std::uint32_t>(seeded(seed_popcnt32, 0xDB) & 0xFFFFFFFFu);
+            if (!tick(run_public_popcnt_case(
+                "popcnt_eax_edx:" + std::to_string(seed_popcnt32),
+                popcnt_eax_edx,
+                seed_popcnt32,
+                CPUEAXH_X86_REG_RAX,
+                CPUEAXH_X86_REG_RDX,
+                popcnt32_source,
+                32,
+                0,
+                failure), failure)) return false;
+
+            const std::uint64_t seed_popcnt64 = seeded(seed_index, 0xE032);
+            const std::uint64_t popcnt64_source = seeded(seed_popcnt64, 0xDC);
+            if (!tick(run_public_popcnt_case(
+                "popcnt_rax_rdx:" + std::to_string(seed_popcnt64),
+                popcnt_rax_rdx,
+                seed_popcnt64,
+                CPUEAXH_X86_REG_RAX,
+                CPUEAXH_X86_REG_RDX,
+                popcnt64_source,
+                64,
+                0,
+                failure), failure)) return false;
+        }
 
         if (features.avx) {
             const std::uint64_t seed_vstmxcsr = seeded(seed_index, 0xE017);
@@ -2924,6 +4316,118 @@ inline bool run_manual_special_tests(const HostFeatures& features, std::uint64_t
         const std::uint64_t seed6 = seeded(seed_index, 0xE007);
         if (!tick(run_manual_exception_case_public("public_rdpid_66_ud:" + std::to_string(seed6), invalid_rdpid_with_66, seed6, CPUEAXH_EXCEPTION_UD, failure), failure)) return false;
         if (!tick(run_manual_exception_case("rdpid_66_ud:" + std::to_string(seed6), invalid_rdpid_with_66, seed6, CPUEAXH_EXCEPTION_UD, failure), failure)) return false;
+
+        const std::uint64_t seed_fninit_nm = seeded(seed_index, 0xE020);
+        if (!tick(run_manual_x87_public_cr0_exception_case("public_fninit_nm:" + std::to_string(seed_fninit_nm), fninit, seed_fninit_nm, 0x80000019ull, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+        if (!tick(run_manual_x87_internal_exception_case("fninit_nm:" + std::to_string(seed_fninit_nm), fninit, seed_fninit_nm, 0x80000019ull, false, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+
+        const std::uint64_t seed_fnstsw_nm = seeded(seed_index, 0xE021);
+        if (!tick(run_manual_x87_public_cr0_exception_case("public_fnstsw_ax_nm:" + std::to_string(seed_fnstsw_nm), fnstsw_ax_only, seed_fnstsw_nm, 0x80000015ull, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+        if (!tick(run_manual_x87_internal_exception_case("fnstsw_ax_nm:" + std::to_string(seed_fnstsw_nm), fnstsw_ax_only, seed_fnstsw_nm, 0x80000015ull, false, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+
+        const std::uint64_t seed_finit_mf = seeded(seed_index, 0xE022);
+        if (!tick(run_manual_x87_internal_exception_case("finit_mf:" + std::to_string(seed_finit_mf), finit_only, seed_finit_mf, 0x80000011ull, true, CPUEAXH_EXCEPTION_MF, failure), failure)) return false;
+
+        const std::uint64_t seed_fstsw_mf = seeded(seed_index, 0xE023);
+        if (!tick(run_manual_x87_internal_exception_case("fstsw_ax_mf:" + std::to_string(seed_fstsw_mf), fstsw_ax_only, seed_fstsw_mf, 0x80000011ull, true, CPUEAXH_EXCEPTION_MF, failure), failure)) return false;
+
+        const std::uint64_t seed_fldcw_nm = seeded(seed_index, 0xE024);
+        if (!tick(run_manual_x87_public_cr0_exception_case("public_fldcw_nm:" + std::to_string(seed_fldcw_nm), fldcw_only, seed_fldcw_nm, 0x80000019ull, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+        if (!tick(run_manual_x87_internal_exception_case("fldcw_nm:" + std::to_string(seed_fldcw_nm), fldcw_only, seed_fldcw_nm, 0x80000019ull, false, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+
+        const std::uint64_t seed_fldcw_mf = seeded(seed_index, 0xE025);
+        if (!tick(run_manual_x87_internal_exception_case("fldcw_mf:" + std::to_string(seed_fldcw_mf), fldcw_only, seed_fldcw_mf, 0x80000011ull, true, CPUEAXH_EXCEPTION_MF, failure), failure)) return false;
+
+        const std::uint64_t seed_fstenv_mf = seeded(seed_index, 0xE028);
+        if (!tick(run_manual_x87_env_store_case(
+            "fstenv_mf:" + std::to_string(seed_fstenv_mf),
+            fstenv_rsp,
+            seed_fstenv_mf,
+            0x037Fu,
+            0x0001u,
+            0xFFFFu,
+            0,
+            0,
+            0,
+            true,
+            true,
+            failure), failure)) return false;
+
+        const std::uint64_t seed_fldenv_nm = seeded(seed_index, 0xE02B);
+        if (!tick(run_manual_x87_public_cr0_exception_case("public_fldenv_nm:" + std::to_string(seed_fldenv_nm), fldenv_only, seed_fldenv_nm, 0x80000019ull, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+        if (!tick(run_manual_x87_internal_exception_case("fldenv_nm:" + std::to_string(seed_fldenv_nm), fldenv_only, seed_fldenv_nm, 0x80000019ull, false, CPUEAXH_EXCEPTION_NM, failure), failure)) return false;
+
+        const std::uint64_t seed_fldenv_mf = seeded(seed_index, 0xE02C);
+        if (!tick(run_manual_x87_internal_exception_case("fldenv_mf:" + std::to_string(seed_fldenv_mf), fldenv_only, seed_fldenv_mf, 0x80000011ull, true, CPUEAXH_EXCEPTION_MF, failure), failure)) return false;
+
+        const std::uint64_t seed_insb = seeded(seed_index, 0xE02D);
+        const std::uint64_t insb_address = kGuestStackBase + 0x80;
+        const std::uint8_t insb0 = static_cast<std::uint8_t>(seeded(seed_insb, 0xD1) & 0xFFu);
+        const std::uint8_t insb1 = static_cast<std::uint8_t>(seeded(seed_insb, 0xD2) & 0xFFu);
+        const std::uint8_t insb2 = static_cast<std::uint8_t>(seeded(seed_insb, 0xD3) & 0xFFu);
+        if (!tick(run_public_ins_escape_case(
+            "insb_rep_edi:" + std::to_string(seed_insb),
+            rep_insb_edi,
+            seed_insb,
+            static_cast<std::uint16_t>(seeded(seed_insb, 0xD0) & 0xFFFFu),
+            0xABCDEF0000000000ull | static_cast<std::uint32_t>(insb_address),
+            0x1234567800000003ull,
+            0,
+            std::vector<std::uint32_t>{ insb0, insb1, insb2 },
+            insb_address,
+            std::vector<std::uint8_t>{ insb0, insb1, insb2 },
+            static_cast<std::uint32_t>(insb_address + 3),
+            0,
+            failure), failure)) return false;
+
+        const std::uint64_t seed_insw = seeded(seed_index, 0xE02E);
+        const std::uint64_t insw_address = kGuestStackBase + 0xA2;
+        const std::uint16_t insw_value = static_cast<std::uint16_t>(seeded(seed_insw, 0xD5) & 0xFFFFu);
+        if (!tick(run_public_ins_escape_case(
+            "insw_df_edi:" + std::to_string(seed_insw),
+            insw_df_edi,
+            seed_insw,
+            static_cast<std::uint16_t>(seeded(seed_insw, 0xD4) & 0xFFFFu),
+            0xCAFEBABE00000000ull | static_cast<std::uint32_t>(insw_address),
+            seeded(seed_insw, 0xD6),
+            RFLAGS_DF,
+            std::vector<std::uint32_t>{ insw_value },
+            insw_address,
+            std::vector<std::uint8_t>{
+                static_cast<std::uint8_t>(insw_value & 0xFFu),
+                static_cast<std::uint8_t>((insw_value >> 8) & 0xFFu)
+            },
+            static_cast<std::uint32_t>(insw_address - 2),
+            seeded(seed_insw, 0xD6),
+            failure), failure)) return false;
+
+        const std::uint64_t seed_insd = seeded(seed_index, 0xE02F);
+        const std::uint64_t insd_address = kGuestStackBase + 0xC0;
+        const std::uint32_t insd_value = static_cast<std::uint32_t>(seeded(seed_insd, 0xD8) & 0xFFFFFFFFu);
+        const std::uint64_t insd_rcx = seeded(seed_insd, 0xD9);
+        if (!tick(run_public_ins_escape_case(
+            "insd_rdi:" + std::to_string(seed_insd),
+            insd_rdi,
+            seed_insd,
+            static_cast<std::uint16_t>(seeded(seed_insd, 0xD7) & 0xFFFFu),
+            insd_address,
+            insd_rcx,
+            0,
+            std::vector<std::uint32_t>{ insd_value },
+            insd_address,
+            std::vector<std::uint8_t>{
+                static_cast<std::uint8_t>(insd_value & 0xFFu),
+                static_cast<std::uint8_t>((insd_value >> 8) & 0xFFu),
+                static_cast<std::uint8_t>((insd_value >> 16) & 0xFFu),
+                static_cast<std::uint8_t>((insd_value >> 24) & 0xFFu)
+            },
+            insd_address + 4,
+            insd_rcx,
+            failure), failure)) return false;
+
+        const std::uint64_t seed_popcnt_lock = seeded(seed_index, 0xE033);
+        if (!tick(run_manual_exception_case_public("public_popcnt_lock_ud:" + std::to_string(seed_popcnt_lock), invalid_popcnt_lock, seed_popcnt_lock, CPUEAXH_EXCEPTION_UD, failure), failure)) return false;
+        if (!tick(run_manual_exception_case("popcnt_lock_ud:" + std::to_string(seed_popcnt_lock), invalid_popcnt_lock, seed_popcnt_lock, CPUEAXH_EXCEPTION_UD, failure), failure)) return false;
     }
 
     for (std::uint64_t seed_index = 0; seed_index < kHostStackSeedCount; ++seed_index) {

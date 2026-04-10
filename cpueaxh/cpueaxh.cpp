@@ -45,7 +45,7 @@ struct cpueaxh_engine {
     CPU_CONTEXT context;
     CPUEAXH_HOOK_ENTRY hooks[CPUEAXH_MAX_HOOKS];
     uint16_t hook_type_counts[CPUEAXH_HOOK_MEM_FETCH_PROT + 1];
-    uint8_t escape_index_by_id[CPUEAXH_ESCAPE_INSN_RDSSPQ + 1];
+    uint8_t escape_index_by_id[CPUEAXH_ESCAPE_INSN_MAX + 1];
     CPUEAXH_ESCAPE_ENTRY* escapes;
     size_t escape_count;
     size_t escape_capacity;
@@ -365,7 +365,7 @@ static bool cpueaxh_is_hook_type_index_valid(uint32_t type) {
 }
 
 static bool cpueaxh_is_escape_index_valid(cpueaxh_escape_insn_id instruction_id) {
-    return instruction_id > CPUEAXH_ESCAPE_INSN_NONE && instruction_id <= CPUEAXH_ESCAPE_INSN_RDSSPQ;
+    return instruction_id > CPUEAXH_ESCAPE_INSN_NONE && instruction_id <= CPUEAXH_ESCAPE_INSN_MAX;
 }
 
 static void cpueaxh_rebuild_escape_index(cpueaxh_engine* engine) {
@@ -505,6 +505,10 @@ static cpueaxh_escape_insn_id cpueaxh_classify_escape_instruction(const uint8_t*
     if (opc == 0x00EC || opc == 0x00ED) {
         *instruction_size = (uint32_t)(prefix_len + 1);
         return CPUEAXH_ESCAPE_INSN_IN;
+    }
+    if (opc == 0x006C || opc == 0x006D) {
+        *instruction_size = (uint32_t)(prefix_len + 1);
+        return CPUEAXH_ESCAPE_INSN_INS;
     }
     if (opc == 0x00E6 || opc == 0x00E7) {
         if (fetched >= (prefix_len + 2)) {

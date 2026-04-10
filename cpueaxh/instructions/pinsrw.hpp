@@ -1,0 +1,238 @@
+// instrusments/pinsrw.hpp - PINSRW/VPINSRW implementation
+
+static inline bool is_pinsrw_instruction(const uint8_t* code, int len, int prefix_len) {
+    if (!code || prefix_len + 4 >= len) {
+        return false;
+    }
+    return code[prefix_len] == 0x0F && code[prefix_len + 1] == 0xC4;
+}
+
+static inline bool is_evex_pinsrw_instruction(const uint8_t* code, size_t code_size) {
+    return code && code_size >= 7 && code[0] == 0x62 && code[4] == 0xC4;
+}
+
+static inline uint64_t apply_legacy_pinsrw64(uint64_t destination, uint16_t source_value, uint8_t imm8) {
+    const uint64_t shift = (uint64_t)(imm8 & 0x03) * 16;
+    destination &= ~(0xFFFFULL << shift);
+    destination |= (uint64_t)source_value << shift;
+    return destination;
+}
+
+static inline DecodedInstruction decode_pinsrw_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size, uint8_t* mandatory_prefix) {
+    DecodedInstruction inst = {};
+    size_t offset = 0;
+    bool has_lock_prefix = false;
+    bool has_unsupported_simd_prefix = false;
+    *mandatory_prefix = 0;
+
+    ctx->rex_present = false;
+    ctx->rex_w = false;
+    ctx->rex_r = false;
+    ctx->rex_x = false;
+    ctx->rex_b = false;
+    ctx->operand_size_override = false;
+    ctx->address_size_override = false;
+
+    while (offset < code_size) {
+        const uint8_t prefix = code[offset];
+        if (prefix == 0x66 || prefix == 0xF2 || prefix == 0xF3) {
+            if (*mandatory_prefix == 0 || *mandatory_prefix == prefix) {
+                *mandatory_prefix = prefix;
+            }
+            else {
+                has_unsupported_simd_prefix = true;
+            }
+            if (prefix == 0x66) {
+                ctx->operand_size_override = true;
+            }
+            offset++;
+        }
+        else if (prefix == 0x67) {
+            ctx->address_size_override = true;
+            offset++;
+        }
+        else if (prefix >= 0x40 && prefix <= 0x4F) {
+            ctx->rex_present = true;
+            ctx->rex_w = ((prefix >> 3) & 1) != 0;
+            ctx->rex_r = ((prefix >> 2) & 1) != 0;
+            ctx->rex_x = ((prefix >> 1) & 1) != 0;
+            ctx->rex_b = (prefix & 1) != 0;
+            offset++;
+        }
+        else if (prefix == 0xF0) {
+            has_lock_prefix = true;
+            offset++;
+        }
+        else if (prefix == 0x26 || prefix == 0x2E || prefix == 0x36 || prefix == 0x3E ||
+                 prefix == 0x64 || prefix == 0x65) {
+            offset++;
+        }
+        else {
+            break;
+        }
+    }
+
+    if (has_lock_prefix || has_unsupported_simd_prefix || (*mandatory_prefix != 0 && *mandatory_prefix != 0x66)) {
+        raise_ud_ctx(ctx);
+        return inst;
+    }
+
+    if (offset + 4 > code_size) {
+        raise_gp_ctx(ctx, 0);
+        return inst;
+    }
+
+    if (code[offset++] != 0x0F || code[offset++] != 0xC4) {
+        raise_ud_ctx(ctx);
+        return inst;
+    }
+
+    if (ctx->cs.descriptor.long_mode) {
+        inst.address_size = ctx->address_size_override ? 32 : 64;
+    }
+    else {
+        inst.address_size = ctx->address_size_override ? 16 : 32;
+    }
+
+    decode_modrm_movdq(ctx, &inst, code, code_size, &offset, false);
+    if (cpu_has_exception(ctx)) {
+        return inst;
+    }
+
+    if (offset >= code_size) {
+        raise_gp_ctx(ctx, 0);
+        return inst;
+    }
+
+    inst.opcode = 0xC4;
+    inst.imm_size = 1;
+    inst.immediate = code[offset++];
+    inst.inst_size = (int)offset;
+    finalize_rip_relative_address(ctx, &inst, (int)offset);
+    ctx->last_inst_size = (int)offset;
+    return inst;
+}
+
+static inline uint16_t read_pinsrw_source_word(CPU_CONTEXT* ctx, const DecodedInstruction* inst) {
+    const uint8_t mod = (inst->modrm >> 6) & 0x03;
+    if (mod == 0x03) {
+        return get_reg16(ctx, decode_movdq_gpr_rm_index(ctx, inst->modrm));
+    }
+    return read_memory_word(ctx, inst->mem_address);
+}
+
+static inline void execute_pinsrw(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
+    uint8_t mandatory_prefix = 0;
+    const DecodedInstruction inst = decode_pinsrw_instruction(ctx, code, code_size, &mandatory_prefix);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+
+    const uint16_t source_value = read_pinsrw_source_word(ctx, &inst);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+
+    if (mandatory_prefix == 0x66) {
+        const int dest = decode_movdq_xmm_reg_index(ctx, inst.modrm);
+        set_xmm128(ctx, dest, apply_avx_pinsrw128(get_xmm128(ctx, dest), source_value, (uint8_t)inst.immediate));
+        return;
+    }
+
+    const int dest = decode_movdq_mm_reg_index(inst.modrm);
+    set_mm64(ctx, dest, apply_legacy_pinsrw64(get_mm64(ctx, dest), source_value, (uint8_t)inst.immediate));
+}
+
+struct EVEXPinsrwPrefix {
+    uint8_t byte1;
+    uint8_t byte2;
+    uint8_t byte3;
+    uint8_t opcode;
+};
+
+static inline int decode_evex_pinsrw_source1_index(const EVEXPinsrwPrefix* prefix) {
+    return (int)((~((prefix->byte2 >> 3) & 0x0F)) & 0x0F);
+}
+
+static inline EVEXPinsrwPrefix decode_evex_pinsrw_prefix(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
+    EVEXPinsrwPrefix prefix = {};
+    if (code_size < 7) {
+        raise_gp_ctx(ctx, 0);
+        return prefix;
+    }
+    if (code[0] != 0x62) {
+        raise_ud_ctx(ctx);
+        return prefix;
+    }
+
+    prefix.byte1 = code[1];
+    prefix.byte2 = code[2];
+    prefix.byte3 = code[3];
+    prefix.opcode = code[4];
+    return prefix;
+}
+
+static inline DecodedInstruction decode_evex_pinsrw_instruction(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size, EVEXPinsrwPrefix* prefix) {
+    DecodedInstruction inst = {};
+    *prefix = decode_evex_pinsrw_prefix(ctx, code, code_size);
+    if (cpu_has_exception(ctx)) {
+        return inst;
+    }
+
+    if (prefix->opcode != 0xC4 ||
+        (prefix->byte1 & 0x03) != 0x01 ||
+        (prefix->byte2 & 0x03) != 0x01 ||
+        (prefix->byte2 & 0x04) == 0 ||
+        (prefix->byte3 & 0x60) != 0 ||
+        (prefix->byte3 & 0x9F) != 0x08) {
+        raise_ud_ctx(ctx);
+        return inst;
+    }
+
+    ctx->rex_present = true;
+    ctx->rex_w = ((prefix->byte2 >> 7) & 1) != 0;
+    ctx->rex_r = (prefix->byte1 & 0x10) == 0;
+    ctx->rex_x = (prefix->byte1 & 0x40) == 0;
+    ctx->rex_b = (prefix->byte1 & 0x20) == 0;
+    ctx->operand_size_override = false;
+    ctx->address_size_override = false;
+
+    inst.address_size = ctx->cs.descriptor.long_mode ? 64 : 32;
+
+    size_t offset = 5;
+    decode_modrm_movdq(ctx, &inst, code, code_size, &offset, false);
+    if (cpu_has_exception(ctx)) {
+        return inst;
+    }
+
+    if (offset >= code_size) {
+        raise_gp_ctx(ctx, 0);
+        return inst;
+    }
+
+    inst.opcode = 0xC4;
+    inst.imm_size = 1;
+    inst.immediate = code[offset++];
+    inst.inst_size = (int)offset;
+    finalize_rip_relative_address(ctx, &inst, (int)offset);
+    ctx->last_inst_size = (int)offset;
+    return inst;
+}
+
+static inline void execute_evex_pinsrw(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
+    EVEXPinsrwPrefix prefix = {};
+    const DecodedInstruction inst = decode_evex_pinsrw_instruction(ctx, code, code_size, &prefix);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+
+    const uint16_t source_value = read_pinsrw_source_word(ctx, &inst);
+    if (cpu_has_exception(ctx)) {
+        return;
+    }
+
+    const int dest = decode_movdq_xmm_reg_index(ctx, inst.modrm);
+    const int src1 = decode_evex_pinsrw_source1_index(&prefix);
+    set_xmm128(ctx, dest, apply_avx_pinsrw128(get_xmm128(ctx, src1), source_value, (uint8_t)inst.immediate));
+    clear_ymm_upper128(ctx, dest);
+}

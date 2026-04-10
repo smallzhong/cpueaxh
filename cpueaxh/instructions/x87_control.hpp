@@ -1,8 +1,4 @@
-// instructions/x87_control.hpp - FNSTCW/FSTCW implementation
-
-static uint16_t x87_default_control_word() {
-    return 0x037Fu;
-}
+// instructions/x87_control.hpp - FLDCW/FNSTCW/FSTCW implementation
 
 static void decode_x87_control_modrm(CPU_CONTEXT* ctx, DecodedInstruction* inst, uint8_t* code, size_t code_size, size_t* offset) {
     if (*offset >= code_size) {
@@ -63,7 +59,8 @@ static DecodedInstruction decode_x87_control_instruction(CPU_CONTEXT* ctx, uint8
     DecodedInstruction inst = {};
     size_t offset = 0;
     bool has_lock_prefix = false;
-    bool has_simd_prefix = false;
+    bool has_rep_prefix = false;
+    bool has_wait_prefix = false;
 
     ctx->rex_present = false;
     ctx->rex_w = false;
@@ -75,8 +72,12 @@ static DecodedInstruction decode_x87_control_instruction(CPU_CONTEXT* ctx, uint8
 
     while (offset < code_size) {
         uint8_t prefix = code[offset];
-        if (prefix == 0x66 || prefix == 0xF2 || prefix == 0xF3) {
-            has_simd_prefix = true;
+        if (prefix == 0x66) {
+            ctx->operand_size_override = true;
+            ++offset;
+        }
+        else if (prefix == 0xF2 || prefix == 0xF3) {
+            has_rep_prefix = true;
             ++offset;
         }
         else if (prefix == 0x67) {
@@ -105,6 +106,7 @@ static DecodedInstruction decode_x87_control_instruction(CPU_CONTEXT* ctx, uint8
     }
 
     if (offset < code_size && code[offset] == 0x9B) {
+        has_wait_prefix = true;
         ++offset;
     }
 
@@ -112,23 +114,34 @@ static DecodedInstruction decode_x87_control_instruction(CPU_CONTEXT* ctx, uint8
         raise_ud_ctx(ctx);
     }
 
-    if (has_lock_prefix || has_simd_prefix) {
+    if (has_lock_prefix || has_rep_prefix) {
         raise_ud_ctx(ctx);
     }
 
     if (ctx->cs.descriptor.long_mode) {
         inst.address_size = ctx->address_size_override ? 32 : 64;
+        inst.operand_size = ctx->operand_size_override ? 16 : 32;
     }
     else {
         inst.address_size = ctx->address_size_override ? 16 : 32;
+        inst.operand_size = ctx->operand_size_override ? 16 : (ctx->cs.descriptor.db ? 32 : 16);
     }
 
     decode_x87_control_modrm(ctx, &inst, code, code_size, &offset);
 
     const uint8_t mod = (inst.modrm >> 6) & 0x03;
     const uint8_t reg = (inst.modrm >> 3) & 0x07;
-    if (reg != 7 || mod == 3) {
+    if ((reg != 5 && reg != 7) || mod == 3) {
         raise_ud_ctx(ctx);
+    }
+
+    if (cpu_has_exception(ctx)) {
+        return inst;
+    }
+
+    const bool is_waiting_instruction = has_wait_prefix || reg == 5;
+    if (!cpu_x87_check_device_available(ctx) || !cpu_x87_check_wait(ctx, is_waiting_instruction)) {
+        return inst;
     }
 
     inst.inst_size = (int)offset;
@@ -143,5 +156,15 @@ void execute_x87_control(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
         return;
     }
 
-    write_memory_word(ctx, inst.mem_address, x87_default_control_word());
+    const uint8_t reg = (inst.modrm >> 3) & 0x07;
+    if (reg == 5) {
+        ctx->x87_control_word = read_memory_word(ctx, inst.mem_address);
+        if (cpu_has_exception(ctx)) {
+            return;
+        }
+        cpu_x87_recompute_pending_exception(ctx);
+        return;
+    }
+
+    write_memory_word(ctx, inst.mem_address, ctx->x87_control_word);
 }

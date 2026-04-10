@@ -185,6 +185,154 @@ static bool cpu_step_may_touch_vector_state(const uint8_t* buf, int fetched, int
     return true;
 }
 
+static bool try_execute_x87_instruction(CPU_CONTEXT* ctx, const uint8_t* buf, size_t fetched, uint8_t raw_opc, int prefix_len) {
+    if (!ctx || !buf || fetched == 0) {
+        return false;
+    }
+
+    if (raw_opc == 0xD9 || (raw_opc == 0x9B && (prefix_len + 1) < (int)fetched && buf[prefix_len + 1] == 0xD9)) {
+        const uint8_t d9_opcode_offset = (raw_opc == 0x9B) ? 1 : 0;
+        const uint8_t d9_modrm = ((prefix_len + d9_opcode_offset + 1) < (int)fetched) ? buf[prefix_len + d9_opcode_offset + 1] : 0xFF;
+        const uint8_t d9_reg = (uint8_t)((d9_modrm >> 3) & 0x07);
+        if (d9_reg == 4 || d9_reg == 6) {
+            execute_x87_env(ctx, const_cast<uint8_t*>(buf), fetched);
+        }
+        else {
+            execute_x87_control(ctx, const_cast<uint8_t*>(buf), fetched);
+        }
+        return true;
+    }
+
+    if (raw_opc == 0xDB || (raw_opc == 0x9B && (prefix_len + 1) < (int)fetched && buf[prefix_len + 1] == 0xDB)) {
+        execute_x87_init(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+
+    if (raw_opc == 0xDD || raw_opc == 0xDF ||
+        (raw_opc == 0x9B && (prefix_len + 1) < (int)fetched &&
+            (buf[prefix_len + 1] == 0xDD || buf[prefix_len + 1] == 0xDF))) {
+        execute_x87_status(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+
+    return false;
+}
+
+static bool try_execute_two_byte_misc_instruction(
+    CPU_CONTEXT* ctx,
+    const uint8_t* buf,
+    size_t fetched,
+    int prefix_len,
+    uint16_t opc,
+    uint8_t mandatory_prefix,
+    int* result_code) {
+    if (!ctx || !buf || !result_code) {
+        return false;
+    }
+
+    if (opc >= 0x0F80 && opc <= 0x0F8F) {
+        execute_jcc(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc >= 0x0F90 && opc <= 0x0F9F) {
+        execute_setcc(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FA0 || opc == 0x0FA8) {
+        execute_push(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FA1 || opc == 0x0FA9) {
+        execute_pop(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0F0D || opc == 0x0F18 || (opc == 0x0F2B && mandatory_prefix == 0x00)) {
+        execute_sse_misc(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if ((opc == 0x0F2B && mandatory_prefix == 0x66) ||
+        (opc == 0x0FE7 && mandatory_prefix == 0x66) ||
+        opc == 0x0FC3) {
+        execute_sse2_store_misc(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FAE) {
+        execute_sse_state(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FAF) {
+        execute_imul(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FBE || opc == 0x0FBF) {
+        execute_movsx(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FB6 || opc == 0x0FB7) {
+        execute_movzx(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FA3 || opc == 0x0FAB || opc == 0x0FB3 || opc == 0x0FBB || opc == 0x0FBA) {
+        execute_bt(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FBC || opc == 0x0FBD) {
+        execute_bsf(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FB8) {
+        execute_popcnt(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc >= 0x0FC8 && opc <= 0x0FCF) {
+        execute_bswap(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0F31) {
+        raise_ud_ctx(ctx);
+        *result_code = CPU_STEP_UD;
+        return true;
+    }
+    if (opc == 0x0FC0 || opc == 0x0FC1) {
+        execute_xadd(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FB0 || opc == 0x0FB1) {
+        execute_cmpxchg(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FC7 && is_rdpid_instruction(buf, fetched, prefix_len)) {
+        execute_rdpid(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FC7 && (prefix_len + 2) < (int)fetched) {
+        const uint8_t modrm = buf[prefix_len + 2];
+        if ((((modrm >> 3) & 0x07) == 7) && (((modrm >> 6) & 0x03) == 3)) {
+            raise_ud_ctx(ctx);
+            *result_code = CPU_STEP_UD;
+            return true;
+        }
+        if (is_rdrand_instruction(buf, fetched)) {
+            raise_ud_ctx(ctx);
+            *result_code = CPU_STEP_UD;
+            return true;
+        }
+        execute_cmpxchg8b16b(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+    if (opc == 0x0FC7) {
+        if (is_rdrand_instruction(buf, fetched)) {
+            raise_ud_ctx(ctx);
+            *result_code = CPU_STEP_UD;
+            return true;
+        }
+        execute_cmpxchg8b16b(ctx, const_cast<uint8_t*>(buf), fetched);
+        return true;
+    }
+
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // cpu_step - execute one instruction at ctx->rip
 // ---------------------------------------------------------------------------
@@ -231,6 +379,21 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
     }
     if (fetched == 0) {
         result_code = cpu_has_exception(ctx) ? CPU_STEP_EXCEPTION : CPU_STEP_FETCH_ERR;
+        goto cpu_step_finish;
+    }
+
+    if (buf[0] == 0x62 && is_evex_pinsrw_instruction(buf, (size_t)fetched)) {
+        cpu_capture_scalar_snapshot(&saved_scalar, ctx);
+        scalar_snapshot_valid = true;
+        cpu_capture_vector_snapshot(&saved_vector, ctx);
+        vector_snapshot_valid = true;
+
+        execute_evex_pinsrw(ctx, buf, (size_t)fetched);
+        if (cpu_has_exception(ctx)) {
+            result_code = CPU_STEP_EXCEPTION;
+            goto cpu_step_finish;
+        }
+        ctx->rip = rip_pre + (uint64_t)ctx->last_inst_size;
         goto cpu_step_finish;
     }
 
@@ -425,6 +588,9 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
         (opc == 0x0F70 && (mandatory_prefix == 0x66 || mandatory_prefix == 0xF2 || mandatory_prefix == 0xF3))) {
         execute_sse2_shuffle(ctx, buf, (size_t)fetched);
     }
+    else if (opc == 0x0FC4) {
+        execute_pinsrw(ctx, buf, (size_t)fetched);
+    }
     else if (opc == 0x0F14 || opc == 0x0F15 || opc == 0x0FC6) {
         execute_sse_shuffle(ctx, buf, (size_t)fetched);
     }
@@ -465,83 +631,9 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
     else if (opc == 0x0FC2 || opc == 0x0F2E || opc == 0x0F2F) {
         execute_sse_cmp(ctx, buf, (size_t)fetched);
     }
-    else if (opc >= 0x0F80 && opc <= 0x0F8F) {
-        execute_jcc(ctx, buf, (size_t)fetched);
-    }
-    else if (opc >= 0x0F90 && opc <= 0x0F9F) {
-        execute_setcc(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FA0 || opc == 0x0FA8) {
-        execute_push(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FA1 || opc == 0x0FA9) {
-        execute_pop(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0F0D || opc == 0x0F18 || (opc == 0x0F2B && mandatory_prefix == 0x00)) {
-        execute_sse_misc(ctx, buf, (size_t)fetched);
-    }
-    else if ((opc == 0x0F2B && mandatory_prefix == 0x66) ||
-        (opc == 0x0FE7 && mandatory_prefix == 0x66) ||
-        opc == 0x0FC3) {
-        execute_sse2_store_misc(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FAE) {
-        execute_sse_state(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FAF) {
-        execute_imul(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FBE || opc == 0x0FBF) {
-        execute_movsx(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FB6 || opc == 0x0FB7) {
-        execute_movzx(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FA3 || opc == 0x0FAB || opc == 0x0FB3 || opc == 0x0FBB || opc == 0x0FBA) {
-        execute_bt(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FBC || opc == 0x0FBD) {
-        execute_bsf(ctx, buf, (size_t)fetched);
-    }
-    else if (opc >= 0x0FC8 && opc <= 0x0FCF) {
-        execute_bswap(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0F31) {
-        raise_ud_ctx(ctx);
-        result_code = CPU_STEP_UD;
-        goto cpu_step_finish;
-    }
-    else if (opc == 0x0FC0 || opc == 0x0FC1) {
-        execute_xadd(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FB0 || opc == 0x0FB1) {
-        execute_cmpxchg(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FC7 && is_rdpid_instruction(buf, (size_t)fetched, prefix_len)) {
-        execute_rdpid(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FC7 && (prefix_len + 2) < fetched) {
-        const uint8_t modrm = buf[prefix_len + 2];
-        if ((((modrm >> 3) & 0x07) == 7) && (((modrm >> 6) & 0x03) == 3)) {
-            raise_ud_ctx(ctx);
-            result_code = CPU_STEP_UD;
+    else if (try_execute_two_byte_misc_instruction(ctx, buf, (size_t)fetched, prefix_len, opc, mandatory_prefix, &result_code)) {
+        if (result_code != CPU_STEP_OK) {
             goto cpu_step_finish;
-        }
-        if (is_rdrand_instruction(buf, (size_t)fetched)) {
-            raise_ud_ctx(ctx);
-            result_code = CPU_STEP_UD;
-            goto cpu_step_finish;
-        }
-        execute_cmpxchg8b16b(ctx, buf, (size_t)fetched);
-    }
-    else if (opc == 0x0FC7) {
-        if (is_rdrand_instruction(buf, (size_t)fetched)) {
-            raise_ud_ctx(ctx);
-            result_code = CPU_STEP_UD;
-            goto cpu_step_finish;
-        }
-        else {
-            execute_cmpxchg8b16b(ctx, buf, (size_t)fetched);
         }
     }
     else if (opc == 0x0F3A && mandatory_prefix == 0x66) {
@@ -688,9 +780,7 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
     else if (raw_opc == 0xD7) {
         execute_xlat(ctx, buf, (size_t)fetched);
     }
-    // FNSTCW/FSTCW: D9 /7, 9B D9 /7
-    else if (raw_opc == 0xD9 || (raw_opc == 0x9B && (prefix_len + 1) < fetched && buf[prefix_len + 1] == 0xD9)) {
-        execute_x87_control(ctx, buf, (size_t)fetched);
+    else if (try_execute_x87_instruction(ctx, buf, (size_t)fetched, raw_opc, prefix_len)) {
     }
     // CLC/STC/CLD/STD: F8, F9, FC, FD
     else if (raw_opc == 0xF8 || raw_opc == 0xF9 || raw_opc == 0xFC || raw_opc == 0xFD) {
