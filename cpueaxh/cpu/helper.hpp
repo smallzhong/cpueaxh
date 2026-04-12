@@ -437,12 +437,68 @@ void set_ymm_upper128_parts(CPU_CONTEXT* ctx, int reg, uint64_t low, uint64_t hi
     ctx->ymm_upper[reg].high = high;
 }
 
+ZMMUpperRegister get_zmm_upper256(CPU_CONTEXT* ctx, int reg);
+void set_zmm_upper256(CPU_CONTEXT* ctx, int reg, ZMMUpperRegister value);
+void clear_zmm_upper256(CPU_CONTEXT* ctx, int reg);
+void clear_all_zmm_upper256(CPU_CONTEXT* ctx);
+
 void clear_ymm_upper128(CPU_CONTEXT* ctx, int reg) {
     ctx->ymm_upper[reg] = {};
+    clear_zmm_upper256(ctx, reg);
 }
 
 void clear_all_ymm_upper128(CPU_CONTEXT* ctx) {
     CPUEAXH_MEMSET(ctx->ymm_upper, 0, sizeof(ctx->ymm_upper));
+    clear_all_zmm_upper256(ctx);
+}
+
+ZMMUpperRegister get_zmm_upper256(CPU_CONTEXT* ctx, int reg) {
+    return ctx->zmm_upper[reg];
+}
+
+void set_zmm_upper256(CPU_CONTEXT* ctx, int reg, ZMMUpperRegister value) {
+    ctx->zmm_upper[reg] = value;
+}
+
+void clear_zmm_upper256(CPU_CONTEXT* ctx, int reg) {
+    ctx->zmm_upper[reg] = {};
+}
+
+void clear_all_zmm_upper256(CPU_CONTEXT* ctx) {
+    CPUEAXH_MEMSET(ctx->zmm_upper, 0, sizeof(ctx->zmm_upper));
+}
+
+ZMMRegister get_zmm512(CPU_CONTEXT* ctx, int reg) {
+    ZMMRegister value = {};
+    value.xmm0 = ctx->xmm[reg];
+    value.xmm1 = ctx->ymm_upper[reg];
+    value.xmm2 = ctx->zmm_upper[reg].lower;
+    value.xmm3 = ctx->zmm_upper[reg].upper;
+    return value;
+}
+
+void set_zmm512(CPU_CONTEXT* ctx, int reg, ZMMRegister value) {
+    ctx->xmm[reg] = value.xmm0;
+    ctx->ymm_upper[reg] = value.xmm1;
+    ctx->zmm_upper[reg].lower = value.xmm2;
+    ctx->zmm_upper[reg].upper = value.xmm3;
+}
+
+void clear_zmm_above_128(CPU_CONTEXT* ctx, int reg) {
+    clear_ymm_upper128(ctx, reg);
+    clear_zmm_upper256(ctx, reg);
+}
+
+void clear_zmm_above_256(CPU_CONTEXT* ctx, int reg) {
+    clear_zmm_upper256(ctx, reg);
+}
+
+uint64_t get_opmask64(CPU_CONTEXT* ctx, int reg) {
+    return ctx->opmask[reg & 0x07];
+}
+
+void set_opmask64(CPU_CONTEXT* ctx, int reg, uint64_t value) {
+    ctx->opmask[reg & 0x07] = value;
 }
 
 uint64_t get_mm64(CPU_CONTEXT* ctx, int reg) {
@@ -463,6 +519,34 @@ XMMRegister read_xmm_memory(CPU_CONTEXT* ctx, uint64_t address) {
 void write_xmm_memory(CPU_CONTEXT* ctx, uint64_t address, XMMRegister value) {
     write_memory_qword(ctx, address, value.low);
     write_memory_qword(ctx, address + 8, value.high);
+}
+
+ZMMUpperRegister read_zmm_upper_memory(CPU_CONTEXT* ctx, uint64_t address) {
+    ZMMUpperRegister value = {};
+    value.lower = read_xmm_memory(ctx, address);
+    value.upper = read_xmm_memory(ctx, address + 16);
+    return value;
+}
+
+void write_zmm_upper_memory(CPU_CONTEXT* ctx, uint64_t address, ZMMUpperRegister value) {
+    write_xmm_memory(ctx, address, value.lower);
+    write_xmm_memory(ctx, address + 16, value.upper);
+}
+
+ZMMRegister read_zmm_memory(CPU_CONTEXT* ctx, uint64_t address) {
+    ZMMRegister value = {};
+    value.xmm0 = read_xmm_memory(ctx, address);
+    value.xmm1 = read_xmm_memory(ctx, address + 16);
+    value.xmm2 = read_xmm_memory(ctx, address + 32);
+    value.xmm3 = read_xmm_memory(ctx, address + 48);
+    return value;
+}
+
+void write_zmm_memory(CPU_CONTEXT* ctx, uint64_t address, ZMMRegister value) {
+    write_xmm_memory(ctx, address, value.xmm0);
+    write_xmm_memory(ctx, address + 16, value.xmm1);
+    write_xmm_memory(ctx, address + 32, value.xmm2);
+    write_xmm_memory(ctx, address + 48, value.xmm3);
 }
 
 // --- Stack operation helpers ---

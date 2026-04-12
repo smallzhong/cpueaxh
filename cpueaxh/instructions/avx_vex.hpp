@@ -120,6 +120,7 @@ static AVXRegister256 get_ymm256(CPU_CONTEXT* ctx, int reg) {
 static void set_ymm256(CPU_CONTEXT* ctx, int reg, AVXRegister256 value) {
     set_xmm128(ctx, reg, value.low);
     set_ymm_upper128(ctx, reg, value.high);
+    clear_zmm_upper256(ctx, reg);
 }
 
 static AVXRegister256 read_ymm_memory(CPU_CONTEXT* ctx, uint64_t address) {
@@ -4292,6 +4293,18 @@ void execute_avx_vex(CPU_CONTEXT* ctx, uint8_t* code, size_t code_size) {
     }
 
     if (map_select == 0x02) {
+        if (opcode == 0xDB) {
+            if (mandatory_prefix != 1 || is_256 || avx_vex_requires_reserved_vvvv(&prefix)) {
+                raise_ud_ctx(ctx);
+            }
+
+            DecodedInstruction inst = decode_avx_vex_modrm(ctx, code, code_size, &prefix);
+            int dest = avx_vex_dest_index(ctx, inst.modrm);
+            XMMRegister source = read_avx_int_rm128(ctx, &inst);
+            set_xmm128(ctx, dest, apply_aesimc128(source));
+            clear_ymm_upper128(ctx, dest);
+            return;
+        }
         if (opcode == 0x41) {
             if (mandatory_prefix != 1 || is_256 || avx_vex_requires_reserved_vvvv(&prefix)) {
                 raise_ud_ctx(ctx);

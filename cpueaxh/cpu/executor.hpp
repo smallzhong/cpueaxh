@@ -382,6 +382,21 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
         goto cpu_step_finish;
     }
 
+    if (buf[0] == 0x62 && is_evex_palignr_instruction(buf, (size_t)fetched)) {
+        cpu_capture_scalar_snapshot(&saved_scalar, ctx);
+        scalar_snapshot_valid = true;
+        cpu_capture_vector_snapshot(&saved_vector, ctx);
+        vector_snapshot_valid = true;
+
+        execute_evex_palignr(ctx, buf, (size_t)fetched);
+        if (cpu_has_exception(ctx)) {
+            result_code = CPU_STEP_EXCEPTION;
+            goto cpu_step_finish;
+        }
+        ctx->rip = rip_pre + (uint64_t)ctx->last_inst_size;
+        goto cpu_step_finish;
+    }
+
     if (buf[0] == 0x62 && is_evex_pinsrw_instruction(buf, (size_t)fetched)) {
         cpu_capture_scalar_snapshot(&saved_scalar, ctx);
         scalar_snapshot_valid = true;
@@ -389,6 +404,36 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
         vector_snapshot_valid = true;
 
         execute_evex_pinsrw(ctx, buf, (size_t)fetched);
+        if (cpu_has_exception(ctx)) {
+            result_code = CPU_STEP_EXCEPTION;
+            goto cpu_step_finish;
+        }
+        ctx->rip = rip_pre + (uint64_t)ctx->last_inst_size;
+        goto cpu_step_finish;
+    }
+
+    if (buf[0] == 0x62 && is_evex_pinsr_instruction(buf, (size_t)fetched)) {
+        cpu_capture_scalar_snapshot(&saved_scalar, ctx);
+        scalar_snapshot_valid = true;
+        cpu_capture_vector_snapshot(&saved_vector, ctx);
+        vector_snapshot_valid = true;
+
+        execute_evex_pinsr(ctx, buf, (size_t)fetched);
+        if (cpu_has_exception(ctx)) {
+            result_code = CPU_STEP_EXCEPTION;
+            goto cpu_step_finish;
+        }
+        ctx->rip = rip_pre + (uint64_t)ctx->last_inst_size;
+        goto cpu_step_finish;
+    }
+
+    if (buf[0] == 0x62 && is_evex_pextr_instruction(buf, (size_t)fetched)) {
+        cpu_capture_scalar_snapshot(&saved_scalar, ctx);
+        scalar_snapshot_valid = true;
+        cpu_capture_vector_snapshot(&saved_vector, ctx);
+        vector_snapshot_valid = true;
+
+        execute_evex_pextr(ctx, buf, (size_t)fetched);
         if (cpu_has_exception(ctx)) {
             result_code = CPU_STEP_EXCEPTION;
             goto cpu_step_finish;
@@ -549,6 +594,25 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
     else if (opc == 0x0F38 && is_pshufb_instruction(buf, fetched, prefix_len)) {
         execute_pshufb(ctx, buf, (size_t)fetched);
     }
+    else if (opc == 0x0F38 && mandatory_prefix == 0) {
+        if (is_sha256rnds2_instruction(buf, fetched, prefix_len)) {
+            execute_sha256rnds2(ctx, buf, (size_t)fetched);
+        }
+        else if (is_sha256msg1_instruction(buf, fetched, prefix_len)) {
+            execute_sha256msg1(ctx, buf, (size_t)fetched);
+        }
+        else if (is_sha256msg2_instruction(buf, fetched, prefix_len)) {
+            execute_sha256msg2(ctx, buf, (size_t)fetched);
+        }
+        else {
+            raise_ud_ctx(ctx);
+            result_code = CPU_STEP_UD;
+            goto cpu_step_finish;
+        }
+    }
+    else if (opc == 0x0F38 && mandatory_prefix == 0x66 && is_aesimc_instruction(buf, fetched, prefix_len)) {
+        execute_aesimc(ctx, buf, (size_t)fetched);
+    }
     else if (opc == 0x0F38 && mandatory_prefix == 0x66 && is_aesenc_instruction(buf, fetched, prefix_len)) {
         execute_aesenc(ctx, buf, (size_t)fetched);
     }
@@ -636,8 +700,20 @@ static int cpu_step_with_prefetch(CPU_CONTEXT* ctx, const uint8_t* prefetched_by
             goto cpu_step_finish;
         }
     }
+    else if (opc == 0x0F3A && is_palignr_instruction(buf, fetched, prefix_len)) {
+        execute_palignr(ctx, buf, (size_t)fetched);
+    }
     else if (opc == 0x0F3A && mandatory_prefix == 0x66) {
-        if (is_aeskeygenassist_instruction(buf, fetched, prefix_len)) {
+        if (is_pinsr_instruction(buf, fetched, prefix_len)) {
+            execute_pinsr(ctx, buf, (size_t)fetched);
+        }
+        else if (is_pextr_instruction(buf, fetched, prefix_len)) {
+            execute_pextr(ctx, buf, (size_t)fetched);
+        }
+        else if (is_pblendw_instruction(buf, fetched, prefix_len)) {
+            execute_pblendw(ctx, buf, (size_t)fetched);
+        }
+        else if (is_aeskeygenassist_instruction(buf, fetched, prefix_len)) {
             execute_aeskeygenassist(ctx, buf, (size_t)fetched);
         }
         else if (is_roundss_instruction(buf, fetched, prefix_len)) {

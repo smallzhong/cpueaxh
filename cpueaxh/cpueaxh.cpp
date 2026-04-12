@@ -90,6 +90,26 @@ static void cpueaxh_copy_xmm_in(XMMRegister* out_xmm, const cpueaxh_x86_xmm* in_
     out_xmm->high = in_xmm->high;
 }
 
+static void cpueaxh_copy_ymm_out(cpueaxh_x86_ymm* out_ymm, const XMMRegister* lower, const XMMRegister* upper) {
+    cpueaxh_copy_xmm_out(&out_ymm->lower, lower);
+    cpueaxh_copy_xmm_out(&out_ymm->upper, upper);
+}
+
+static void cpueaxh_copy_ymm_in(XMMRegister* out_lower, XMMRegister* out_upper, const cpueaxh_x86_ymm* in_ymm) {
+    cpueaxh_copy_xmm_in(out_lower, &in_ymm->lower);
+    cpueaxh_copy_xmm_in(out_upper, &in_ymm->upper);
+}
+
+static void cpueaxh_copy_zmm_out(cpueaxh_x86_zmm* out_zmm, const XMMRegister* lower0, const XMMRegister* lower1, const ZMMUpperRegister* upper) {
+    cpueaxh_copy_ymm_out(&out_zmm->lower, lower0, lower1);
+    cpueaxh_copy_ymm_out(&out_zmm->upper, &upper->lower, &upper->upper);
+}
+
+static void cpueaxh_copy_zmm_in(XMMRegister* out_lower0, XMMRegister* out_lower1, ZMMUpperRegister* out_upper, const cpueaxh_x86_zmm* in_zmm) {
+    cpueaxh_copy_ymm_in(out_lower0, out_lower1, &in_zmm->lower);
+    cpueaxh_copy_ymm_in(&out_upper->lower, &out_upper->upper, &in_zmm->upper);
+}
+
 static SegmentRegister* cpueaxh_select_segment(CPU_CONTEXT* context, int regid) {
     switch (regid) {
     case CPUEAXH_X86_REG_ES_SELECTOR:
@@ -249,6 +269,8 @@ static void cpueaxh_context_out(cpueaxh_x86_context* out_context, const CPU_CONT
     CPUEAXH_MEMCPY(out_context->regs, in_context->regs, sizeof(out_context->regs));
     CPUEAXH_MEMCPY(out_context->xmm, in_context->xmm, sizeof(out_context->xmm));
     CPUEAXH_MEMCPY(out_context->ymm_upper, in_context->ymm_upper, sizeof(out_context->ymm_upper));
+    CPUEAXH_MEMCPY(out_context->zmm_upper, in_context->zmm_upper, sizeof(out_context->zmm_upper));
+    CPUEAXH_MEMCPY(out_context->opmask, in_context->opmask, sizeof(out_context->opmask));
     CPUEAXH_MEMCPY(out_context->mm, in_context->mm, sizeof(out_context->mm));
     out_context->rip = in_context->rip;
     out_context->rflags = in_context->rflags;
@@ -274,6 +296,8 @@ static void cpueaxh_context_in(CPU_CONTEXT* out_context, const cpueaxh_x86_conte
     CPUEAXH_MEMCPY(out_context->regs, in_context->regs, sizeof(out_context->regs));
     CPUEAXH_MEMCPY(out_context->xmm, in_context->xmm, sizeof(out_context->xmm));
     CPUEAXH_MEMCPY(out_context->ymm_upper, in_context->ymm_upper, sizeof(out_context->ymm_upper));
+    CPUEAXH_MEMCPY(out_context->zmm_upper, in_context->zmm_upper, sizeof(out_context->zmm_upper));
+    CPUEAXH_MEMCPY(out_context->opmask, in_context->opmask, sizeof(out_context->opmask));
     CPUEAXH_MEMCPY(out_context->mm, in_context->mm, sizeof(out_context->mm));
     out_context->rip = in_context->rip;
     out_context->rflags = in_context->rflags;
@@ -692,8 +716,17 @@ static cpueaxh_err cpueaxh_reg_read_raw(const CPU_CONTEXT* context, int regid, v
     if (regid >= CPUEAXH_X86_REG_YMM0 && regid <= CPUEAXH_X86_REG_YMM15) {
         cpueaxh_x86_ymm* output = reinterpret_cast<cpueaxh_x86_ymm*>(value);
         const int ymm_index = regid - CPUEAXH_X86_REG_YMM0;
-        cpueaxh_copy_xmm_out(&output->lower, &context->xmm[ymm_index]);
-        cpueaxh_copy_xmm_out(&output->upper, &context->ymm_upper[ymm_index]);
+        cpueaxh_copy_ymm_out(output, &context->xmm[ymm_index], &context->ymm_upper[ymm_index]);
+        return CPUEAXH_ERR_OK;
+    }
+    if (regid >= CPUEAXH_X86_REG_ZMM0 && regid <= CPUEAXH_X86_REG_ZMM15) {
+        cpueaxh_x86_zmm* output = reinterpret_cast<cpueaxh_x86_zmm*>(value);
+        const int zmm_index = regid - CPUEAXH_X86_REG_ZMM0;
+        cpueaxh_copy_zmm_out(output, &context->xmm[zmm_index], &context->ymm_upper[zmm_index], &context->zmm_upper[zmm_index]);
+        return CPUEAXH_ERR_OK;
+    }
+    if (regid >= CPUEAXH_X86_REG_K0 && regid <= CPUEAXH_X86_REG_K7) {
+        *reinterpret_cast<uint64_t*>(value) = context->opmask[regid - CPUEAXH_X86_REG_K0];
         return CPUEAXH_ERR_OK;
     }
     if (regid >= CPUEAXH_X86_REG_MM0 && regid <= CPUEAXH_X86_REG_MM7) {
@@ -799,8 +832,17 @@ static cpueaxh_err cpueaxh_reg_write_raw(CPU_CONTEXT* context, int regid, const 
     if (regid >= CPUEAXH_X86_REG_YMM0 && regid <= CPUEAXH_X86_REG_YMM15) {
         const cpueaxh_x86_ymm* input = reinterpret_cast<const cpueaxh_x86_ymm*>(value);
         const int ymm_index = regid - CPUEAXH_X86_REG_YMM0;
-        cpueaxh_copy_xmm_in(&context->xmm[ymm_index], &input->lower);
-        cpueaxh_copy_xmm_in(&context->ymm_upper[ymm_index], &input->upper);
+        cpueaxh_copy_ymm_in(&context->xmm[ymm_index], &context->ymm_upper[ymm_index], input);
+        return CPUEAXH_ERR_OK;
+    }
+    if (regid >= CPUEAXH_X86_REG_ZMM0 && regid <= CPUEAXH_X86_REG_ZMM15) {
+        const cpueaxh_x86_zmm* input = reinterpret_cast<const cpueaxh_x86_zmm*>(value);
+        const int zmm_index = regid - CPUEAXH_X86_REG_ZMM0;
+        cpueaxh_copy_zmm_in(&context->xmm[zmm_index], &context->ymm_upper[zmm_index], &context->zmm_upper[zmm_index], input);
+        return CPUEAXH_ERR_OK;
+    }
+    if (regid >= CPUEAXH_X86_REG_K0 && regid <= CPUEAXH_X86_REG_K7) {
+        context->opmask[regid - CPUEAXH_X86_REG_K0] = *reinterpret_cast<const uint64_t*>(value);
         return CPUEAXH_ERR_OK;
     }
     if (regid >= CPUEAXH_X86_REG_MM0 && regid <= CPUEAXH_X86_REG_MM7) {

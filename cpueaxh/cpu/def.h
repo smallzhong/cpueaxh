@@ -118,12 +118,26 @@ struct XMMRegister {
     uint64_t high;
 };
 
+struct ZMMUpperRegister {
+    XMMRegister lower;
+    XMMRegister upper;
+};
+
+struct ZMMRegister {
+    XMMRegister xmm0;
+    XMMRegister xmm1;
+    XMMRegister xmm2;
+    XMMRegister xmm3;
+};
+
 struct CPU_CONTEXT {
     uint64_t regs[16];
     uint64_t control_regs[16];
     uint32_t processor_id;
     XMMRegister xmm[16];
     XMMRegister ymm_upper[16];
+    ZMMUpperRegister zmm_upper[16];
+    uint64_t opmask[8];
     uint64_t mm[8];
     uint32_t mxcsr;
     uint16_t x87_control_word;
@@ -240,6 +254,8 @@ struct CPU_SCALAR_SNAPSHOT {
 struct CPU_VECTOR_SNAPSHOT {
     XMMRegister xmm[16];
     XMMRegister ymm_upper[16];
+    ZMMUpperRegister zmm_upper[16];
+    uint64_t opmask[8];
     uint64_t mm[8];
     uint32_t mxcsr;
 };
@@ -327,6 +343,8 @@ inline void cpu_capture_vector_snapshot(CPU_VECTOR_SNAPSHOT* out, const CPU_CONT
 
     CPUEAXH_MEMCPY(out->xmm, ctx->xmm, sizeof(out->xmm));
     CPUEAXH_MEMCPY(out->ymm_upper, ctx->ymm_upper, sizeof(out->ymm_upper));
+    CPUEAXH_MEMCPY(out->zmm_upper, ctx->zmm_upper, sizeof(out->zmm_upper));
+    CPUEAXH_MEMCPY(out->opmask, ctx->opmask, sizeof(out->opmask));
     CPUEAXH_MEMCPY(out->mm, ctx->mm, sizeof(out->mm));
     out->mxcsr = ctx->mxcsr;
 }
@@ -338,6 +356,8 @@ inline void cpu_restore_vector_snapshot(CPU_CONTEXT* ctx, const CPU_VECTOR_SNAPS
 
     CPUEAXH_MEMCPY(ctx->xmm, snapshot->xmm, sizeof(snapshot->xmm));
     CPUEAXH_MEMCPY(ctx->ymm_upper, snapshot->ymm_upper, sizeof(snapshot->ymm_upper));
+    CPUEAXH_MEMCPY(ctx->zmm_upper, snapshot->zmm_upper, sizeof(snapshot->zmm_upper));
+    CPUEAXH_MEMCPY(ctx->opmask, snapshot->opmask, sizeof(snapshot->opmask));
     CPUEAXH_MEMCPY(ctx->mm, snapshot->mm, sizeof(snapshot->mm));
     ctx->mxcsr = snapshot->mxcsr;
 }
